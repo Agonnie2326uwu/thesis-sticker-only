@@ -19,3 +19,16 @@ Thumbs.db
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Local research logs
+research_outputs/*.csv
+research_outputs/*.jsonl
+
+# Training outputs and model checkpoints
+runs/
+*.pt
+
+# Secrets and environment files
+.env
+.env.*
+!.env.example
