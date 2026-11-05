@@ -21,6 +21,7 @@ Everything can be run and shown from one window: **`python dashboard.py`**.
 | `evaluate_test.py` | Test 1 |
 | `evaluate_field.py` | Test 2 (after the field photos are labelled) |
 | `evaluate_synthetic.py` | Test 3 |
+| `make_gallery.py` | Photos page: draws both models' boxes on the test photos (viewing only, changes no result) |
 | `train.py` | Training script (the final models are already trained; not needed to run the tests) |
 | `runs/detect/carl-andre-de-castro/runs/*/weights/best.pt` | The two final trained models |
 | `research_outputs/` | Results written by the tests |

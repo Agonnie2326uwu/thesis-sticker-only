@@ -8,6 +8,8 @@ One window for the whole study, for presenting to the panel:
   2  Field Test            detection by distance (5-10 m)
   3  Synthetic Stressors   motion blur, occlusion, low light, glare
   4  Final Comparison      which model is better under each condition
+  5  Photos                every photo used in the tests, both models'
+                           boxes side by side (made by make_gallery.py)
 
 Each test page explains the test in plain words, shows the comparison table
 and charts, and has a Run button that runs the evaluation script in the
@@ -20,6 +22,7 @@ Usage (from the project folder, with the venv active):
 
 import csv
 import math
+import re
 import os
 import queue
 import subprocess
@@ -48,6 +51,8 @@ FIELD_DIR = OUTPUT_DIR / "field_results"
 SYNTHETIC_DIR = OUTPUT_DIR / "synthetic_results"
 REPORT_PDF = OUTPUT_DIR / "benchmark_report.pdf"
 ARCHIVE_DIR = OUTPUT_DIR / "_archive"
+GALLERY_DIR = OUTPUT_DIR / "gallery"
+GALLERY_INDEX = GALLERY_DIR / "gallery_index.csv"
 
 # What "Start over" moves into the archive. Field-test captures
 # (research_outputs/field_test) are raw data and are never touched.
@@ -58,6 +63,7 @@ RESULT_PATHS = [
     OUTPUT_DIR / "benchmark_report.pdf",
     FIELD_DIR,
     SYNTHETIC_DIR,
+    GALLERY_DIR,
     BASE_DIR / "runs" / "test_eval",
     BASE_DIR / "runs" / "field_eval",
 ]
@@ -111,11 +117,50 @@ STRESSORS = {
               "fmt": lambda v: f"gain {v:.2f}x"},
 }
 
+# Terminal colour / cursor codes (e.g. "\x1b[34m", "\x1b[K") are removed from
+# the test output before it is shown, since the details window has no colours.
+ANSI_CODES = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b[()][A-Za-z0-9]")
+
+
+def clean_line(text):
+    return ANSI_CODES.sub("", text).strip()
+
+
 SCRIPTS = {
     "test": "evaluate_test.py",
     "field": "evaluate_field.py",
     "synthetic": "evaluate_synthetic.py",
+    "gallery": "make_gallery.py",      # pictures only, no GPU check
 }
+
+# The computer each test is measured on, as stated in the thesis.
+EXPECTED_GPU = {
+    "test": "GTX 1660 SUPER",
+    "synthetic": "GTX 1660 SUPER",
+    "field": "RTX 2050",
+}
+TEST_NAMES = {"test": "Test 1", "synthetic": "Test 3", "field": "Test 2"}
+
+
+def gpu_name():
+    """Name of this computer's NVIDIA GPU, or "" if there is none."""
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        name = result.stdout.strip().splitlines()
+        if name:
+            return name[0].strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return torch.cuda.get_device_name(0)
+    except Exception:
+        pass
+    return ""
 
 
 # ============================================================
@@ -219,6 +264,57 @@ def load_synthetic(synthetic_dir=SYNTHETIC_DIR):
 # ============================================================
 # VERDICTS (plain-language winners)
 # ============================================================
+
+PHOTO_SETS = {"test": "Test 1 · Natural test set",
+              "field": "Test 2 · Field test",
+              "synthetic": "Test 3 · Synthetic stressors"}
+
+# Filter choices on the Photos page -> the "result" values they keep.
+PHOTO_FILTERS = {
+    "All photos": None,
+    "One model found every sticker, the other did not":
+        {"only YOLO26n found all", "only YOLO11n found all"},
+    "Only YOLO26n found every sticker": {"only YOLO26n found all"},
+    "Only YOLO11n found every sticker": {"only YOLO11n found all"},
+    "Both models missed a sticker": {"both missed some"},
+    "Both models found every sticker": {"both found all"},
+    "A model drew a wrong box": "wrong",
+    "Photos with no sticker": {"no sticker"},
+}
+
+
+def load_gallery(index=GALLERY_INDEX):
+    """Rows of gallery_index.csv whose picture still exists."""
+    rows = read_csv(index)
+    folder = Path(index).parent
+    return [r for r in rows if r.get("file")
+            and (folder / r["file"]).is_file()]
+
+
+def filter_photos(rows, choice):
+    keep = PHOTO_FILTERS.get(choice)
+    if keep is None:
+        return list(rows)
+    if keep == "wrong":
+        return [r for r in rows
+                if any((num(r.get(f"{m}_wrong")) or 0) > 0 for m in MODELS)]
+    return [r for r in rows if r.get("result") in keep]
+
+
+def plural(count, one, many=None):
+    return f"{count} {one if count == 1 else (many or one + 's')}"
+
+
+def missed_and_wrong(rows):
+    """{model: (stickers missed, wrong boxes)} over the given photos."""
+    totals = {}
+    for model in MODELS:
+        missed = sum((num(r.get("stickers")) or 0)
+                     - (num(r.get(f"{model}_found")) or 0) for r in rows)
+        wrong = sum(num(r.get(f"{model}_wrong")) or 0 for r in rows)
+        totals[model] = (int(missed), int(wrong))
+    return totals
+
 
 def higher_better(a, b, tolerance=0.0):
     if a is None or b is None:
@@ -577,7 +673,7 @@ def fig_ranking(ranking):
 
 class Dashboard:
     PAGES = ("Overview", "1  Natural Test Set", "2  Field Test (Distance)",
-             "3  Synthetic Stressors", "4  Final Comparison")
+             "3  Synthetic Stressors", "4  Final Comparison", "5  Photos")
 
     def __init__(self, root):
         self.root = root
@@ -591,6 +687,9 @@ class Dashboard:
         self.figures = []
         self.images = []
         self.current = None
+        self.photo = {"set": None, "filter": "All photos", "distance": "All",
+                      "lighting": "All", "stressor": "motion_blur",
+                      "image": None, "level": 0, "position": 0}
 
         self._style()
         self._layout()
@@ -721,6 +820,8 @@ class Dashboard:
         for figure in self.figures:
             figure.clear()
         self.figures, self.images = [], []
+        self.root.unbind("<Left>")
+        self.root.unbind("<Right>")
         self.canvas.yview_moveto(0)
         builder = {
             self.PAGES[0]: self.page_overview,
@@ -728,6 +829,7 @@ class Dashboard:
             self.PAGES[2]: self.page_field,
             self.PAGES[3]: self.page_synthetic,
             self.PAGES[4]: self.page_final,
+            self.PAGES[5]: self.page_photos,
         }[page]
         try:
             builder()
@@ -761,8 +863,8 @@ class Dashboard:
             ttk.Label(row, text=step, wraplength=860,
                       justify="left").pack(side="left", anchor="w")
 
-    def cards(self, items):
-        row = ttk.Frame(self.page)
+    def cards(self, items, parent=None):
+        row = ttk.Frame(parent or self.page)
         row.pack(fill="x", pady=(6, 4))
         for label, value, note in items:
             card = ttk.Frame(row, style="Card.TFrame", padding=(14, 10))
@@ -901,8 +1003,10 @@ class Dashboard:
         if len(gpu) == 2:
             fa = num(gpu["YOLO26n"].get("fps_runs_mean") or gpu["YOLO26n"].get("fps"))
             fb = num(gpu["YOLO11n"].get("fps_runs_mean") or gpu["YOLO11n"].get("fps"))
-            cards.append(("Fastest on GPU", higher_better(fa, fb),
-                          f"{fa:.1f} vs {fb:.1f} FPS"))
+            sd = max(num(gpu["YOLO26n"].get("fps_runs_sd")) or 0,
+                     num(gpu["YOLO11n"].get("fps_runs_sd")) or 0)
+            cards.append(("Fastest on GPU", higher_better(fa, fb, tolerance=sd),
+                          f"{fa:.1f} vs {fb:.1f} FPS (run-to-run ± {sd:.1f})"))
         cards.append(("Stickers found (of 238)",
                       f"{m['YOLO26n']['tp_at_app_conf']} vs "
                       f"{m['YOLO11n']['tp_at_app_conf']}",
@@ -1130,6 +1234,249 @@ class Dashboard:
 
     # ---------------- running scripts ----------------
 
+    # ---------------- photos page ----------------
+
+    RESULT_TEXT = {
+        "both found all": "Both models found every sticker",
+        "only YOLO26n found all": "Only YOLO26n found every sticker",
+        "only YOLO11n found all": "Only YOLO11n found every sticker",
+        "both missed some": "Both models missed a sticker",
+        "no sticker": "No sticker in this photo",
+    }
+
+    def page_photos(self):
+        self.photo_widgets = None
+        self.heading(
+            "Photos used in the tests",
+            "Each picture is one test photo shown twice: YOLO26n's boxes on "
+            "the left, YOLO11n's on the right. A sticker counts as found with "
+            "the same rule as the tests (confidence at least 0.25 and at "
+            "least 50% overlap with the real sticker).")
+        legend = ttk.Frame(self.page)
+        legend.pack(anchor="w", pady=(0, 2))
+        for colour, words in ((COLOURS["YOLO26n"], "YOLO26n box"),
+                              (COLOURS["YOLO11n"], "YOLO11n box"),
+                              ("#dc2828", "MISSED = a real sticker the model "
+                                          "did not find")):
+            tk.Label(legend, text="■", fg=colour, bg=SURFACE,
+                     font=("Segoe UI", 13)).pack(side="left")
+            ttk.Label(legend, text=" " + words + "      ").pack(side="left")
+        self.text("WRONG = a box where there is no sticker (a false alarm). "
+                  "The number on each box is how sure the model is. Use the "
+                  "Previous / Next buttons or the arrow keys.", muted=True)
+
+        row = ttk.Frame(self.page)
+        row.pack(anchor="w", pady=(8, 8))
+        ttk.Button(row, text="Prepare photos", style="Run.TButton",
+                   command=lambda: self.run("gallery", [])).pack(side="left")
+        ttk.Label(row, text="   draws both models' boxes on the photos. It "
+                  "does not change any result. Run it again after a new "
+                  "test.", style="Muted.TLabel").pack(side="left")
+
+        self.photo_rows = load_gallery()
+        if not self.photo_rows:
+            self.no_results(
+                "Click Prepare photos. Test 1 photos need only the test set. "
+                "Test 3 photos need Test 3 to be run first, and field photos "
+                "need the labelled field dataset.")
+            return
+
+        self.photo_controls = ttk.Frame(self.page)
+        self.photo_controls.pack(anchor="w", fill="x", pady=(4, 6))
+        self.photo_area = ttk.Frame(self.page)
+        self.photo_area.pack(anchor="w", fill="x")
+        self._photo_controls()
+        self.root.bind("<Left>", lambda e: self._photo_step(-1))
+        self.root.bind("<Right>", lambda e: self._photo_step(1))
+
+    def _combo(self, label, options, field, width):
+        """A labelled drop-down that stores its choice in self.photo."""
+        keys = [k for k, _ in options]
+        labels = [text for _, text in options]
+        if self.photo[field] not in keys:
+            self.photo[field] = keys[0]
+        box = ttk.Frame(self.photo_controls)
+        box.pack(side="left", padx=(0, 14))
+        ttk.Label(box, text=label, style="Muted.TLabel").pack(anchor="w")
+        var = tk.StringVar(value=labels[keys.index(self.photo[field])])
+        combo = ttk.Combobox(box, textvariable=var, values=labels,
+                             state="readonly", width=width)
+        combo.pack(anchor="w")
+
+        def changed(_event):
+            self.photo[field] = keys[labels.index(var.get())]
+            self.photo["position"] = 0
+            if field == "set":
+                self._photo_controls()
+            else:
+                self._photo_view()
+            self.root.focus_set()
+        combo.bind("<<ComboboxSelected>>", changed)
+
+    def _photo_controls(self):
+        for child in self.photo_controls.winfo_children():
+            child.destroy()
+        rows = self.photo_rows
+        sets = [k for k in PHOTO_SETS if any(r["set"] == k for r in rows)]
+        self._combo("Test", [(k, PHOTO_SETS[k]) for k in sets], "set", 28)
+        subset = [r for r in rows if r["set"] == self.photo["set"]]
+
+        if self.photo["set"] == "synthetic":
+            stressors = [k for k in STRESSORS
+                         if any(r.get("stressor") == k for r in subset)]
+            self._combo("Stressor", [(k, STRESSORS[k]["name"])
+                                     for k in stressors], "stressor", 14)
+            images = sorted({r["image"] for r in subset})
+            self._combo("Photo", [(i, i) for i in images], "image", 34)
+        else:
+            if self.photo["set"] == "field":
+                distances = sorted({r.get("distance_m") for r in subset
+                                    if r.get("distance_m")},
+                                   key=lambda v: num(v) or 0)
+                self._combo("Distance", [("All", "All")]
+                            + [(d, f"{d} m") for d in distances],
+                            "distance", 7)
+                times = {r.get("lighting") for r in subset if r.get("lighting")}
+                ordered = ([t for t in ("morning", "noon", "afternoon")
+                            if t in times] + sorted(times - {"morning", "noon",
+                                                             "afternoon"}))
+                self._combo("Time of day", [("All", "All")]
+                            + [(t, t.capitalize()) for t in ordered],
+                            "lighting", 11)
+            self._combo("Show", [(k, k) for k in PHOTO_FILTERS], "filter", 46)
+        self._photo_view()
+
+    def _photo_selection(self):
+        subset = [r for r in self.photo_rows if r["set"] == self.photo["set"]]
+        if self.photo["set"] == "synthetic":
+            steps = [r for r in subset
+                     if r.get("stressor") == self.photo["stressor"]
+                     and r["image"] == self.photo["image"]]
+            return sorted(steps, key=lambda r: num(r.get("level")) or 0)
+        if self.photo["set"] == "field":
+            if self.photo["distance"] != "All":
+                subset = [r for r in subset
+                          if r.get("distance_m") == self.photo["distance"]]
+            if self.photo["lighting"] != "All":
+                subset = [r for r in subset
+                          if r.get("lighting") == self.photo["lighting"]]
+        return filter_photos(subset, self.photo["filter"])
+
+    def _photo_view(self):
+        area = self.photo_area
+        for child in area.winfo_children():
+            child.destroy()
+        self.images = []
+        self.photo_widgets = None
+        rows = self._photo_selection()
+        synthetic = self.photo["set"] == "synthetic"
+
+        if not rows:
+            ttk.Label(area, text="No photos match this choice.",
+                      style="Muted.TLabel").pack(anchor="w", pady=10)
+            return
+
+        if not synthetic:
+            totals = missed_and_wrong(rows)
+            stickers = sum(int(num(r.get("stickers")) or 0) for r in rows)
+            self.cards([("Photos shown", f"{len(rows)}",
+                         f"{stickers} stickers in them")]
+                       + [(f"{m} missed", plural(totals[m][0], "sticker"),
+                           plural(totals[m][1], "wrong box", "wrong boxes"))
+                          for m in MODELS],
+                       parent=area)
+
+        nav = ttk.Frame(area)
+        nav.pack(anchor="w", fill="x", pady=(8, 4))
+        back = "◀  Easier" if synthetic else "◀  Previous"
+        forward = "Harder  ▶" if synthetic else "Next  ▶"
+        ttk.Button(nav, text=back, takefocus=0,
+                   command=lambda: self._photo_step(-1)).pack(side="left")
+        scale = None
+        if synthetic:
+            scale = tk.Scale(nav, from_=0, to=len(rows) - 1, orient="horizontal",
+                             showvalue=0, length=360, takefocus=0,
+                             bg=SURFACE, highlightthickness=0,
+                             troughcolor=GRID, sliderlength=22,
+                             command=lambda v: self._photo_goto(int(float(v))))
+            scale.pack(side="left", padx=10)
+        ttk.Button(nav, text=forward, takefocus=0,
+                   command=lambda: self._photo_step(1)).pack(side="left")
+        counter = ttk.Label(nav, text="", font=("Segoe UI", 11, "bold"))
+        counter.pack(side="left", padx=14)
+
+        caption = ttk.Label(area, text="", style="Muted.TLabel",
+                            wraplength=950, justify="left")
+        caption.pack(anchor="w", pady=(2, 4))
+        picture = ttk.Label(area)
+        picture.pack(anchor="w")
+
+        self.photo_widgets = {"rows": rows, "scale": scale, "counter": counter,
+                              "caption": caption, "picture": picture,
+                              "synthetic": synthetic, "index": None}
+        key = "level" if synthetic else "position"
+        start = max(0, min(len(rows) - 1, self.photo[key]))
+        if scale is not None:
+            scale.set(start)
+        self._photo_goto(start)
+
+    def _photo_step(self, delta):
+        widgets = getattr(self, "photo_widgets", None)
+        if not widgets or widgets["index"] is None:
+            return
+        target = widgets["index"] + delta
+        if widgets["scale"] is not None:
+            widgets["scale"].set(max(0, min(len(widgets["rows"]) - 1, target)))
+        self._photo_goto(target)
+
+    def _photo_goto(self, index):
+        widgets = getattr(self, "photo_widgets", None)
+        if not widgets:
+            return
+        rows = widgets["rows"]
+        index = max(0, min(len(rows) - 1, index))
+        if widgets["index"] == index:
+            return
+        widgets["index"] = index
+        row = rows[index]
+
+        if widgets["synthetic"]:
+            self.photo["level"] = index
+            info = STRESSORS.get(row.get("stressor"), {})
+            level = num(row.get("level"))
+            amount = (info["fmt"](level) if info and level is not None
+                      else row.get("level", ""))
+            widgets["counter"].configure(
+                text=f"Level {index + 1} of {len(rows)}:  {amount}"
+                     + ("  (original photo)" if index == 0 else ""))
+            details = [row["image"]]
+        else:
+            self.photo["position"] = index
+            widgets["counter"].configure(text=f"Photo {index + 1} of "
+                                              f"{len(rows)}")
+            details = [row["image"]]
+            if row.get("distance_m"):
+                details.append(f"{row['distance_m']} m")
+            if row.get("lighting"):
+                details.append(row["lighting"])
+        details.append(self.RESULT_TEXT.get(row.get("result"),
+                                            row.get("result", "")))
+        widgets["caption"].configure(text="   ·   ".join(details))
+
+        try:
+            from PIL import Image, ImageTk
+            with Image.open(GALLERY_DIR / row["file"]) as source:
+                image = source.copy()
+        except (ImportError, OSError) as exc:
+            widgets["picture"].configure(image="", text=f"Cannot open the "
+                                         f"picture: {exc}")
+            return
+        width = max(640, self.canvas.winfo_width() - 90)
+        image.thumbnail((width, 640))
+        photo = ImageTk.PhotoImage(image)
+        self.images = [photo]
+        widgets["picture"].configure(image=photo, text="")
+
     def run(self, key, extra):
         if self.process is not None:
             messagebox.showinfo("Test running",
@@ -1140,6 +1487,21 @@ class Dashboard:
             messagebox.showerror("Missing script", f"{script.name} was not "
                                  "found in the project folder.")
             return
+
+        expected = EXPECTED_GPU.get(key)
+        found = gpu_name()
+        if expected and expected.lower() not in found.lower():
+            if not messagebox.askyesno(
+                    "Different computer",
+                    f"This computer's GPU is {found or 'not an NVIDIA GPU'}. "
+                    f"In the paper, {TEST_NAMES[key]} is measured on the "
+                    f"{expected}, and the results shown on this page were "
+                    "measured there.\n\nYou do not need to run it again to "
+                    "show the results.\n\nRun it anyway on this computer? "
+                    "The new results would replace the current ones and "
+                    "would not match the paper."):
+                return
+            extra = [*extra, "--allow-other-gpu"]
 
         env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1",
                    PYTHONUNBUFFERED="1")
@@ -1166,11 +1528,13 @@ class Dashboard:
             parts = buffer.replace(b"\r", b"\n").split(b"\n")
             buffer = parts.pop()
             for part in parts:
-                text = part.decode("utf-8", errors="replace").strip()
+                text = clean_line(part.decode("utf-8", errors="replace"))
                 if text:
                     self.lines.put(text)
         if buffer.strip():
-            self.lines.put(buffer.decode("utf-8", errors="replace").strip())
+            text = clean_line(buffer.decode("utf-8", errors="replace"))
+            if text:
+                self.lines.put(text)
 
     def _poll(self, name):
         last = None

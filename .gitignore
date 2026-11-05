@@ -15,10 +15,13 @@ __pycache__/
 /carl-andre-de-castro/
 research_outputs/field_test/
 research_outputs/_archive/
+research_outputs/gallery/
 research_outputs/live_detection_*
 *.jpg
 *.jpeg
 *.png
+# ...except the small example crops shown on the dashboard's Test 3 page
+!research_outputs/synthetic_results/examples/*.jpg
 *.ndjson
 *.cache
 
