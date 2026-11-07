@@ -17,6 +17,12 @@ highest confidence first). YOLO26n runs NMS-free, YOLO11n with NMS.
 This only makes pictures for viewing. It does not change any test result,
 so it can run on any computer and needs no GPU check.
 
+Privacy: the models run on the same photos as the tests (the original
+dataset copy), but the pictures SHOWN are drawn on the blurred copy on the
+Ultralytics Platform (plates and faces blurred), matched by file name.
+A photo with no blurred copy is left out of the gallery and listed, so no
+unblurred plate is shown to the panel.
+
 Usage (from the project folder, with the venv active):
     python make_gallery.py
     python make_gallery.py --sets test synthetic --synthetic-photos 8
@@ -163,13 +169,18 @@ def draw_half(image, name, truth, predictions):
     return np.vstack([bar, picture]), len(found), wrong
 
 
-def side_by_side(image, truth, predictions_by_model):
-    """Both halves next to each other, plus the counts for the index."""
+def side_by_side(image, truth, predictions_by_model, display=None):
+    """
+    Both halves next to each other, plus the counts for the index.
+    `image` is what the models saw; `display` (same size) is what is drawn
+    on, e.g. the blurred copy of the same photo.
+    """
     import numpy as np
 
+    shown = image if display is None else display
     halves, counts = [], {}
     for name in ev.MODEL_PATHS:
-        half, found, wrong = draw_half(image, name, truth,
+        half, found, wrong = draw_half(shown, name, truth,
                                        predictions_by_model[name])
         halves.append(half)
         counts[name] = (found, wrong)
@@ -208,6 +219,44 @@ def index_row(test, image_name, file, truth, counts, **extra):
 
 
 # ============================================================
+# BLURRED COPY FOR DISPLAY
+# ============================================================
+
+SKIPPED = []          # photos left out because no blurred copy was found
+
+
+def blurred_copies(data):
+    """{file stem: path} of the blurred dataset on the Platform, or None
+    when the tests already use the Platform copy (nothing to swap)."""
+    if str(data) == str(ev.PLATFORM_DATA):
+        return None
+    try:
+        _names, images = ef.dataset_images(ev.PLATFORM_DATA)
+    except Exception as error:      # no API key / offline
+        raise SystemExit("Could not load the blurred copy from the "
+                         f"Ultralytics Platform ({error}). Pictures are not "
+                         "made, so no unblurred photo is shown.")
+    print(f"  Blurred copy for display: {len(images)} photos")
+    return images
+
+
+def display_image(image, path, blurred):
+    """The blurred copy of `path`, resized to `image`, or None to skip."""
+    import cv2
+
+    if blurred is None:
+        return image
+    match = blurred.get(Path(path).stem)
+    shown = cv2.imread(str(match)) if match else None
+    if shown is None:
+        SKIPPED.append(Path(path).name)
+        return None
+    if shown.shape[:2] != image.shape[:2]:
+        shown = cv2.resize(shown, (image.shape[1], image.shape[0]))
+    return shown
+
+
+# ============================================================
 # THE THREE SETS
 # ============================================================
 
@@ -220,17 +269,21 @@ def make_test(models, device, data):
     import cv2
 
     _yaml, paths, _names = ev.resolve_test_images(data)
+    blurred = blurred_copies(data)
     fresh("test")
     rows = []
     for number, path in enumerate(paths, start=1):
         image = cv2.imread(str(path))
         if image is None:
             continue
+        shown = display_image(image, path, blurred)
+        if shown is None:
+            continue
         height, width = image.shape[:2]
         truth = pixel_boxes(ef.read_labels(path), width, height)
         predictions = {n: confident(m, h, image, device)
                        for n, (m, h) in models.items()}
-        picture, counts = side_by_side(image, truth, predictions)
+        picture, counts = side_by_side(image, truth, predictions, shown)
         file = GALLERY_DIR / "test" / f"{path.stem}.jpg"
         save(picture, file)
         rows.append(index_row("test", path.name, file, truth, counts))
@@ -286,6 +339,7 @@ def make_synthetic(models, device, data, photos):
     if not wanted:
         raise SystemExit("Test 3 found no baseline photos.")
     items, _n = es.load_test_set(data)
+    blurred = blurred_copies(data)
     by_name = {path.name: (path, boxes) for path, boxes in items}
     chosen = [by_name[n] for n in wanted if n in by_name]
 
@@ -296,12 +350,17 @@ def make_synthetic(models, device, data, photos):
         image = cv2.imread(str(path))
         if image is None:
             continue
+        shown = display_image(image, path, blurred)
+        if shown is None:
+            continue
         for stressor, sweep in es.SWEEPS.items():
             for step, value in enumerate(sweep["values"]):
                 degraded, truth = es.degrade(stressor, image, boxes, value)
+                shown_degraded, _ = es.degrade(stressor, shown, boxes, value)
                 predictions = {n: confident(m, h, degraded, device)
                                for n, (m, h) in models.items()}
-                picture, counts = side_by_side(degraded, truth, predictions)
+                picture, counts = side_by_side(degraded, truth, predictions,
+                                               shown_degraded)
                 file = (GALLERY_DIR / "synthetic" / stressor
                         / f"{path.stem}_{step:02d}.jpg")
                 save(picture, file)
@@ -375,6 +434,12 @@ def main(argv=None):
 
     ev.write_csv(INDEX, kept + made)
     print(f"\nSaved {len(made)} pictures in {GALLERY_DIR}")
+    if SKIPPED:
+        print(f"Left out {len(SKIPPED)} photos with no blurred copy on the "
+              "Platform (renamed or missing there), so no unblurred plate is "
+              "shown:")
+        for name in sorted(set(SKIPPED))[:40]:
+            print(f"  {name}")
     if skipped:
         print("Skipped: " + ", ".join(names[k] for k in skipped))
     return 0

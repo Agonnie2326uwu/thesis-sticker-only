@@ -22,8 +22,6 @@ Usage (from the project folder, with the venv active):
     python evaluate_test.py                  # accuracy + GPU and CPU speed
     python evaluate_test.py --skip-speed     # accuracy only
     python evaluate_test.py --devices gpu    # speed on the GPU only
-    python evaluate_test.py --extra-heads    # also YOLO26n with the NMS head
-                                             # (supplementary row only)
 
 Outputs:
     research_outputs/test_metrics.csv       accuracy table (one row per model)
@@ -49,8 +47,38 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 
-# Same dataset address train.py uses. A local data.yaml path also works.
-DATA = "ul://carl-andre-de-castro/datasets/student-vehicle-sticker"
+# The dataset on the Ultralytics Platform (the address train.py uses).
+PLATFORM_DATA = "ul://carl-andre-de-castro/datasets/student-vehicle-sticker"
+
+# The exact copy of the dataset that the final models were trained and tested
+# on (downloaded by Ultralytics on this computer before some photos were
+# re-uploaded to the Platform in Nov 2026). The tests use this copy, so every
+# result refers to the same 210 test photos. If it is not on this computer
+# (e.g. the classmate's laptop), the Platform address is used instead.
+ORIGINAL_DATASET = Path.home() / "datasets" / "student-vehicle-sticker-b0394f94"
+ORIGINAL_YAML = BASE_DIR / "original_dataset.yaml"
+
+
+def default_data():
+    """Local data.yaml of the original dataset copy, else the Platform."""
+    images = ORIGINAL_DATASET / "images"
+    if not (images / "test").is_dir():
+        return PLATFORM_DATA
+    for found in sorted(ORIGINAL_DATASET.glob("*.yaml")):
+        return str(found)
+    # No yaml in the copy: write one. Ultralytics requires train and val
+    # entries; the tests only read the test split.
+    test = "images/test"
+    train = "images/train" if (images / "train").is_dir() else test
+    val = "images/val" if (images / "val").is_dir() else test
+    ORIGINAL_YAML.write_text(
+        f"path: {ORIGINAL_DATASET.as_posix()}\ntrain: {train}\nval: {val}\n"
+        f"test: {test}\nnames:\n  0: student-vehicle-sticker\n",
+        encoding="utf-8")
+    return str(ORIGINAL_YAML)
+
+
+DATA = default_data()
 
 FINAL_RUNS_DIR = BASE_DIR / "runs" / "detect" / "carl-andre-de-castro" / "runs"
 
@@ -63,15 +91,6 @@ MODEL_PATHS = {
 HEADS = {
     "YOLO26n": {"label": "one-to-one (NMS-free)", "args": {"nms": False}},
     "YOLO11n": {"label": "NMS", "args": {}},
-}
-
-# Supplementary only (--extra-heads): YOLO26n through its one-to-many head + NMS.
-EXTRA_HEADS = {
-    "YOLO26n (NMS head)": {
-        "checkpoint_of": "YOLO26n",
-        "label": "one-to-many + NMS (supplementary)",
-        "args": {},
-    },
 }
 
 EXPECTED_TEST_IMAGES = 210
@@ -517,8 +536,6 @@ def main(argv=None):
     parser.add_argument("--devices", nargs="+", default=["gpu", "cpu"],
                         choices=["gpu", "cpu"])
     parser.add_argument("--skip-speed", action="store_true")
-    parser.add_argument("--extra-heads", action="store_true",
-                        help="also evaluate YOLO26n with its NMS head")
     parser.add_argument("--allow-count-mismatch", action="store_true")
     parser.add_argument("--allow-other-gpu", action="store_true",
                         help=f"run even if the GPU is not the "
@@ -533,11 +550,6 @@ def main(argv=None):
         if name not in MODEL_PATHS:
             raise SystemExit(f"Unknown model {name}. Choose from {list(MODEL_PATHS)}")
         jobs.append((name, MODEL_PATHS[name], HEADS[name]))
-
-    if args.extra_heads:
-        for name, extra in EXTRA_HEADS.items():
-            if extra["checkpoint_of"] in args.models:
-                jobs.append((name, MODEL_PATHS[extra["checkpoint_of"]], extra))
 
     for name, checkpoint, _ in jobs:
         if not checkpoint.is_file():

@@ -4,9 +4,8 @@ Chapter 5: evaluate YOLO26n and YOLO11n on the labelled field-test images.
 Matches the thesis (Step 8, SOP 3 and SOP 4):
   1. Standard metrics on the field images (Ultralytics validation, same as
      evaluate_test.py): precision, recall, F1, mAP@0.5, mAP@0.5:0.95, and
-     TP / FP / FN at the 0.25 threshold. Reported for all field images, for
-     each distance (6-10 m), and descriptively for each lighting, motion and
-     occlusion label recorded by the app.
+     TP / FP / FN at the 0.25 threshold. Reported for all field images and
+     for each distance (5-10 m).
   2. Per-sticker detection outcomes: a sticker is DETECTED when a predicted
      box has confidence >= 0.25 and IoU >= 0.5 with its ground-truth box.
   3. Distance breaking points (SOP 4), from captures of parked vehicles so
@@ -67,15 +66,15 @@ FIELD_LOG = BASE_DIR / "research_outputs" / "field_test" / "field_log.csv"
 RESULTS_DIR = BASE_DIR / "research_outputs" / "field_results"
 RUNS_DIR = BASE_DIR / "runs" / "field_eval"
 
-# Groups reported with standard metrics. Distance is the field-test stressor;
-# the other labels are recorded by the app and reported descriptively.
-# Daylight only: dusk and night were excluded (headlights hid the sticker).
+# Groups reported with standard metrics: distance is the only field-test
+# condition. Daylight only: dusk and night were excluded (headlights hid
+# the sticker).
 GROUPS = {
     "distance_m": ["5", "6", "7", "8", "9", "10"],   # 5 m = baseline
-    "lighting": ["morning", "noon", "afternoon"],
-    "motion": ["parked", "slow", "normal speed"],
-    "occlusion": ["none", "partial", "heavy"],
 }
+# (Lighting, motion and occlusion are the same for every field capture:
+# daylight, parked, nothing covering the sticker. They are tested in
+# Test 3 instead.)
 
 DISTANCE_MOTION = "parked"   # distance breaking points use parked captures
 DETECT_CONF = 0.25           # thesis definition of "detected"
@@ -337,6 +336,7 @@ def sticker_outcomes(models, matched, device):
                 "capture_id": row.get("capture_id", ""),
                 "sticker_index": index,
                 **{factor: row.get(factor, "") for factor in GROUPS},
+                "motion": row.get("motion", "") or DISTANCE_MOTION,
                 "sticker_px_width_640": w * width * scale,
                 "sticker_px_height_640": h * height * scale,
             }

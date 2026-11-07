@@ -131,6 +131,7 @@ SCRIPTS = {
     "field": "evaluate_field.py",
     "synthetic": "evaluate_synthetic.py",
     "gallery": "make_gallery.py",      # pictures only, no GPU check
+    "ranking": "evaluate_synthetic.py",  # with --rank-only: no model run
 }
 
 # The computer each test is measured on, as stated in the thesis.
@@ -688,7 +689,7 @@ class Dashboard:
         self.images = []
         self.current = None
         self.photo = {"set": None, "filter": "All photos", "distance": "All",
-                      "lighting": "All", "stressor": "motion_blur",
+                      "stressor": "motion_blur",
                       "image": None, "level": 0, "position": 0}
 
         self._style()
@@ -723,6 +724,10 @@ class Dashboard:
                         font=("Segoe UI", 16, "bold"))
         style.configure("CardLabel.TLabel", background="#ffffff",
                         foreground=MUTED, font=("Segoe UI", 9))
+        style.configure("Danger.TButton", background=PANEL,
+                        foreground=MUTED, anchor="w", padding=(14, 8),
+                        relief="flat", font=("Segoe UI", 9))
+        style.map("Danger.TButton", background=[("active", "#f3dcdc")])
         style.configure("Run.TButton", font=("Segoe UI", 10, "bold"),
                         padding=(14, 6))
         style.configure("Treeview", rowheight=26, font=base,
@@ -751,7 +756,7 @@ class Dashboard:
         side = ttk.Frame(body, style="Side.TFrame", width=240)
         side.pack(side="left", fill="y")
         side.pack_propagate(False)
-        ttk.Label(side, text="STEPS", background=PANEL, foreground=MUTED,
+        ttk.Label(side, text="RESULTS", background=PANEL, foreground=MUTED,
                   font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=16,
                                                      pady=(16, 6))
         self.nav = {}
@@ -761,16 +766,18 @@ class Dashboard:
             button.pack(fill="x")
             self.nav[page] = button
 
-        ttk.Separator(side).pack(fill="x", pady=12)
+        ttk.Label(side, text="TOOLS", background=PANEL, foreground=MUTED,
+                  font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=16,
+                                                     pady=(22, 6))
+        ttk.Button(side, text="Open camera app (live demo)",
+                   style="Side.TButton", command=self.open_app).pack(fill="x")
         ttk.Button(side, text="Export PDF report", style="Side.TButton",
                    command=self.export_pdf).pack(fill="x")
-        ttk.Button(side, text="Open live demo (camera app)",
-                   style="Side.TButton", command=self.open_app).pack(fill="x")
-        ttk.Button(side, text="Refresh results", style="Side.TButton",
-                   command=lambda: self.show(self.current)).pack(fill="x")
-        ttk.Separator(side).pack(fill="x", pady=12)
-        ttk.Button(side, text="Start over (archive results)",
-                   style="Side.TButton", command=self.start_over).pack(fill="x")
+        # Kept apart at the bottom so it is not clicked by accident.
+        ttk.Button(side, text="Start over (archive all results)",
+                   style="Danger.TButton",
+                   command=self.start_over).pack(side="bottom", fill="x",
+                                                 pady=(0, 10))
 
         main = ttk.Frame(body)
         main.pack(side="left", fill="both", expand=True)
@@ -831,10 +838,16 @@ class Dashboard:
             self.PAGES[4]: self.page_final,
             self.PAGES[5]: self.page_photos,
         }[page]
+        self.bottom_actions = None
         try:
             builder()
         except Exception as exc:     # a damaged CSV must not crash the show
             self.text(f"Could not show these results: {exc}", muted=True)
+        if self.bottom_actions:
+            buttons, note, title, why = self.bottom_actions
+            self.section(title)
+            self.text(why, muted=True)
+            self.actions(buttons, note)
 
     def heading(self, text, subtitle=None):
         ttk.Label(self.page, text=text, style="Title.TLabel").pack(anchor="w")
@@ -913,14 +926,26 @@ class Dashboard:
             anchor="w", pady=(6, 0))
         ttk.Label(self.page, image=photo).pack(anchor="w")
 
-    def run_bar(self, key, label, extra=None, note=None):
+    def actions(self, buttons, note=None):
+        """A row of run buttons: [(label, script key, extra args), ...].
+        The first button is the main one."""
         row = ttk.Frame(self.page)
         row.pack(anchor="w", pady=(4, 8))
-        ttk.Button(row, text=label, style="Run.TButton",
-                   command=lambda: self.run(key, extra or [])).pack(side="left")
+        for index, (label, key, extra) in enumerate(buttons):
+            ttk.Button(row, text=label,
+                       style="Run.TButton" if index == 0 else "TButton",
+                       command=lambda k=key, e=extra: self.run(k, e)
+                       ).pack(side="left", padx=(0, 8))
         if note:
-            ttk.Label(row, text="   " + note, style="Muted.TLabel").pack(
-                side="left")
+            ttk.Label(row, text=note, style="Muted.TLabel").pack(
+                side="left", padx=(4, 0))
+
+    def run_later(self, buttons, note, title="Run this test again",
+                  why="Only needed to update the results; the new results "
+                      "replace the ones above."):
+        """Show these run buttons at the BOTTOM of the page, so the
+        results come first."""
+        self.bottom_actions = (buttons, note, title, why)
 
     def no_results(self, what):
         box = ttk.Frame(self.page, style="Card.TFrame", padding=16)
@@ -987,12 +1012,13 @@ class Dashboard:
             "Time each model photo by photo: 3 runs on the GPU and 3 on the "
             "CPU, after a full warm-up pass.",
         ])
-        self.run_bar("test", "Run Test 1", note="about 10-20 minutes "
-                     "(GTX 1660 SUPER desktop)")
-
+        buttons = [("Run Test 1", "test", [])]
+        note = "about 10-20 minutes (GTX 1660 SUPER desktop)"
         if len(test1["metrics"]) < 2:
             self.no_results("Click Run Test 1 to create the results.")
+            self.actions(buttons, note)
             return
+        self.run_later(buttons, note)
 
         m = test1["metrics"]
         a, b = num(m["YOLO26n"]["map50_95"]), num(m["YOLO11n"]["map50_95"])
@@ -1066,16 +1092,17 @@ class Dashboard:
             "Fit a curve of detection rate vs. distance to find where each "
             "model drops to 50% (breaking point) and 90% (reliable).",
         ])
-        self.run_bar("field", "Run Test 2", note="run on the RTX 2050 laptop "
-                     "after labelling the field photos")
-
+        buttons = [("Run Test 2", "field", [])]
+        note = "run on the RTX 2050 laptop after labelling the field photos"
         if len(field["points"]) < 2:
             self.no_results("The field test has not been evaluated yet. After "
                             "the field photos are captured and labelled, click "
                             "Run Test 2 on the laptop. To show the results on "
                             "this computer, copy the laptop's "
                             "research_outputs/field_results folder here.")
+            self.actions(buttons, note)
             return
+        self.run_later(buttons, note)
 
         p = field["points"]
         comparison = field["comparison"]
@@ -1136,19 +1163,15 @@ class Dashboard:
             "Fit a curve per condition to find the breaking point (50%) and "
             "reliable point (90%).",
         ])
-        row = ttk.Frame(self.page)
-        row.pack(anchor="w", pady=(4, 8))
-        ttk.Button(row, text="Run Test 3", style="Run.TButton",
-                   command=lambda: self.run("synthetic", [])).pack(side="left")
-        ttk.Button(row, text="Quick trial (5 photos)",
-                   command=lambda: self.run("synthetic", ["--max-images", "5"])
-                   ).pack(side="left", padx=8)
-        ttk.Label(row, text="full run about 45-60 minutes (GTX 1660 SUPER "
-                  "desktop)", style="Muted.TLabel").pack(side="left")
-
+        buttons = [("Run Test 3", "synthetic", []),
+                   ("Quick trial (5 photos)", "synthetic",
+                    ["--max-images", "5"])]
+        note = "full run about 45-60 minutes (GTX 1660 SUPER desktop)"
         if not synthetic["points"]:
             self.no_results("Click Run Test 3 to create the results.")
+            self.actions(buttons, note)
             return
+        self.run_later(buttons, note)
 
         used, total = synthetic["baseline_used"], synthetic["baseline_total"]
         if used and total and used < total:
@@ -1229,10 +1252,12 @@ class Dashboard:
             if not any(r.get("stressor") == "distance"
                        for r in synthetic["ranking"]):
                 self.text("Distance is added here after the field test: run "
-                          "Test 2, copy its results to this computer, then "
-                          "run Test 3 again.", muted=True)
-
-    # ---------------- running scripts ----------------
+                          "Test 2, bring its results to this computer, then "
+                          "click Update ranking.", muted=True)
+            self.actions([("Update ranking", "ranking", ["--rank-only"])],
+                         note="adds the field-test distance to this ranking; "
+                              "takes a few seconds and does not re-run any "
+                              "test")
 
     # ---------------- photos page ----------------
 
@@ -1265,21 +1290,19 @@ class Dashboard:
                   "The number on each box is how sure the model is. Use the "
                   "Previous / Next buttons or the arrow keys.", muted=True)
 
-        row = ttk.Frame(self.page)
-        row.pack(anchor="w", pady=(8, 8))
-        ttk.Button(row, text="Prepare photos", style="Run.TButton",
-                   command=lambda: self.run("gallery", [])).pack(side="left")
-        ttk.Label(row, text="   draws both models' boxes on the photos. It "
-                  "does not change any result. Run it again after a new "
-                  "test.", style="Muted.TLabel").pack(side="left")
-
+        buttons = [("Prepare photos", "gallery", [])]
+        note = ("draws both models' boxes on the photos; does not change any "
+                "result")
         self.photo_rows = load_gallery()
         if not self.photo_rows:
             self.no_results(
                 "Click Prepare photos. Test 1 photos need only the test set. "
                 "Test 3 photos need Test 3 to be run first, and field photos "
                 "need the labelled field dataset.")
+            self.actions(buttons, note)
             return
+        self.run_later(buttons, note, title="Make the photos again",
+                       why="Only needed after a test gets new results.")
 
         self.photo_controls = ttk.Frame(self.page)
         self.photo_controls.pack(anchor="w", fill="x", pady=(4, 6))
@@ -1336,13 +1359,6 @@ class Dashboard:
                 self._combo("Distance", [("All", "All")]
                             + [(d, f"{d} m") for d in distances],
                             "distance", 7)
-                times = {r.get("lighting") for r in subset if r.get("lighting")}
-                ordered = ([t for t in ("morning", "noon", "afternoon")
-                            if t in times] + sorted(times - {"morning", "noon",
-                                                             "afternoon"}))
-                self._combo("Time of day", [("All", "All")]
-                            + [(t, t.capitalize()) for t in ordered],
-                            "lighting", 11)
             self._combo("Show", [(k, k) for k in PHOTO_FILTERS], "filter", 46)
         self._photo_view()
 
@@ -1357,9 +1373,6 @@ class Dashboard:
             if self.photo["distance"] != "All":
                 subset = [r for r in subset
                           if r.get("distance_m") == self.photo["distance"]]
-            if self.photo["lighting"] != "All":
-                subset = [r for r in subset
-                          if r.get("lighting") == self.photo["lighting"]]
         return filter_photos(subset, self.photo["filter"])
 
     def _photo_view(self):
@@ -1457,8 +1470,6 @@ class Dashboard:
             details = [row["image"]]
             if row.get("distance_m"):
                 details.append(f"{row['distance_m']} m")
-            if row.get("lighting"):
-                details.append(row["lighting"])
         details.append(self.RESULT_TEXT.get(row.get("result"),
                                             row.get("result", "")))
         widgets["caption"].configure(text="   ·   ".join(details))
@@ -1476,6 +1487,8 @@ class Dashboard:
         photo = ImageTk.PhotoImage(image)
         self.images = [photo]
         widgets["picture"].configure(image=photo, text="")
+
+    # ---------------- running scripts ----------------
 
     def run(self, key, extra):
         if self.process is not None:

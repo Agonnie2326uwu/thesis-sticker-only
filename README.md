@@ -17,7 +17,7 @@ Everything can be run and shown from one window: **`python dashboard.py`**.
 | File | Purpose |
 |---|---|
 | `dashboard.py` | The main window: runs each test and shows the results, charts and final comparison; exports a PDF report |
-| `app.py` | Live camera demo, and the **Field Test** tab used to capture field photos at the gate |
+| `app.py` | Live camera demo, and the **Field test** tab used to capture field photos at the gate |
 | `evaluate_test.py` | Test 1 |
 | `evaluate_field.py` | Test 2 (after the field photos are labelled) |
 | `evaluate_synthetic.py` | Test 3 |
@@ -66,11 +66,12 @@ python dashboard.py
 2. **Test 3** page -> **Quick trial (5 photos)** to check it works, then
    **Run Test 3** (about 45-60 minutes).
 3. **Field test** (on the RTX 2050 laptop at the PSU gate):
-   - Run `python app.py`, open the **Field Test** tab, start the camera, set
-     the conditions (distance 5-10 m, lighting, motion = parked, occlusion,
-     sticker present) and press **Space** for each photo; at least 20 photos
-     per distance.
-   - Upload `research_outputs/field_test/images/` to the Ultralytics Platform
+   - Run `python app.py`, open the **Field test** tab, start the camera,
+     choose the distance (5-10 m) and press **Space** for each photo of a
+     parked vehicle with a sticker, in daylight; about 30 photos per
+     distance.
+   - Blur faces and plate numbers (keep the file names), then upload
+     `research_outputs/field_test/images/` to the Ultralytics Platform
      as the dataset `student-vehicle-sticker-field` (do not rename files) and
      draw a box around every sticker.
    - In the dashboard, **Test 2** page -> **Run Test 2**.
