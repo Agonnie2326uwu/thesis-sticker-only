@@ -86,6 +86,9 @@ again from Test 1.
 
 ## Notes
 
+- The camera app prefers an external USB camera over the laptop's built-in
+  camera. If the wrong camera opens, choose it in the dashboard's **Camera**
+  dropdown or run `python app.py --camera N` with the camera index.
 - Each script checks the GPU: Tests 1 and 3 expect the GTX 1660 SUPER and
   Test 2 the RTX 2050, matching the thesis. Use `--allow-other-gpu` on the
   command line only if the thesis text is changed to match.
