@@ -7,3 +7,4 @@ pillow
 pandas
 matplotlib
 pyyaml
+pygrabber>=0.2
