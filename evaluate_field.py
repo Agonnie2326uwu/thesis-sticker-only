@@ -5,7 +5,7 @@ Matches the thesis (Step 8, SOP 3 and SOP 4):
   1. Standard metrics on the field images (Ultralytics validation, same as
      evaluate_test.py): precision, recall, F1, mAP@0.5, mAP@0.5:0.95, and
      TP / FP / FN at the 0.25 threshold. Reported for all field images and
-     for each distance (5-10 m).
+     for each distance (6-10 m, beyond the 5 m baseline).
   2. Per-sticker detection outcomes: a sticker is DETECTED when a predicted
      box has confidence >= 0.25 and IoU >= 0.5 with its ground-truth box.
   3. Distance breaking points (SOP 4), from captures of parked vehicles so
@@ -70,7 +70,7 @@ RUNS_DIR = BASE_DIR / "runs" / "field_eval"
 # condition. Daylight only: dusk and night were excluded (headlights hid
 # the sticker).
 GROUPS = {
-    "distance_m": ["5", "6", "7", "8", "9", "10"],   # 5 m = baseline
+    "distance_m": ["6", "7", "8", "9", "10"],   # beyond the 5 m baseline
 }
 # (Lighting, motion and occlusion are the same for every field capture:
 # daylight, parked, nothing covering the sticker. They are tested in

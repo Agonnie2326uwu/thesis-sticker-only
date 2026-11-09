@@ -7,7 +7,7 @@ of PSU student vehicle stickers and compared in three tests:
 | Test | What it checks | Script | Computer |
 |---|---|---|---|
 | 1 Natural test set | Accuracy (mAP, precision, recall) and speed (FPS) on 210 unseen photos | `evaluate_test.py` | GTX 1660 SUPER desktop |
-| 2 Field test | Up to what distance (5-10 m) each model still finds the sticker | `evaluate_field.py` | RTX 2050 laptop |
+| 2 Field test | Up to what distance (6-10 m) each model still finds the sticker | `evaluate_field.py` | RTX 2050 laptop |
 | 3 Synthetic stressors | At what level of motion blur, occlusion, low light and glare each model fails | `evaluate_synthetic.py` | GTX 1660 SUPER desktop |
 
 Everything can be run and shown from one window: **`python dashboard.py`**.
@@ -67,7 +67,7 @@ python dashboard.py
    **Run Test 3** (about 45-60 minutes).
 3. **Field test** (on the RTX 2050 laptop at the PSU gate):
    - Run `python app.py`, open the **Field test** tab, start the camera,
-     choose the distance (5-10 m) and press **Space** for each photo of a
+     choose the distance (6-10 m) and press **Space** for each photo of a
      parked vehicle with a sticker, in daylight; about 30 photos per
      distance.
    - Blur faces and plate numbers (keep the file names), then upload
@@ -86,9 +86,6 @@ again from Test 1.
 
 ## Notes
 
-- The camera app prefers an external USB camera over the laptop's built-in
-  camera. If the wrong camera opens, choose it in the dashboard's **Camera**
-  dropdown or run `python app.py --camera N` with the camera index.
 - Each script checks the GPU: Tests 1 and 3 expect the GTX 1660 SUPER and
   Test 2 the RTX 2050, matching the thesis. Use `--allow-other-gpu` on the
   command line only if the thesis text is changed to match.

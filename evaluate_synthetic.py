@@ -96,7 +96,7 @@ MAP_CONF = ev.MAP_CONF            # 0.001, Ultralytics' floor for mAP
 IOU_THRESHOLDS = np.linspace(0.5, 0.95, 10)
 BOOTSTRAP_RESAMPLES = ef.BOOTSTRAP_RESAMPLES
 BOOTSTRAP_SEED = ef.BOOTSTRAP_SEED
-DISTANCE_RANGE_M = (5.0, 10.0)    # field test range, for SOP 5
+DISTANCE_RANGE_M = (6.0, 10.0)    # field test range, for SOP 5
 
 
 # ============================================================
@@ -367,7 +367,7 @@ def rank_stressors(points, field_file):
         distance_note = "distance included from the field test"
     else:
         distance_note = ("distance NOT included: run evaluate_field.py "
-                         "first, then run this script again")
+                         "first, then run this script with --rank-only")
 
     for model in {e["model"] for e in entries}:
         mine = [e for e in entries if e["model"] == model
@@ -480,6 +480,36 @@ def fmt(value, digits=3):
     return f"{value:.{digits}f}"
 
 
+def update_ranking():
+    """
+    Recompute only the SOP 5 ranking from the saved Test 3 breaking points
+    and the field test's breaking distance. No model is run, so this needs
+    no GPU and no dataset, and the Test 3 results themselves do not change.
+    """
+    path = RESULTS_DIR / "synthetic_breaking_points.csv"
+    if not path.is_file():
+        raise SystemExit("Run Test 3 first: synthetic_breaking_points.csv "
+                         "was not found.")
+    points = []
+    with path.open(newline="", encoding="utf-8-sig") as file:
+        for row in csv.DictReader(file):
+            x50 = row.get("x50")
+            points.append({"stressor": row["stressor"], "model": row["model"],
+                           "x50": float(x50) if x50 not in (None, "") else None,
+                           "note": row.get("note") or ""})
+    ranking, distance_note = rank_stressors(points, FIELD_RESULTS)
+    ev.write_csv(RESULTS_DIR / "stressor_ranking.csv",
+                 [blank_none(r) for r in ranking])
+    print(f"MOST LIMITING STRESSOR (SOP 5; {distance_note})")
+    for entry in sorted(ranking, key=lambda e: (e["model"],
+                                                e["rank_most_limiting"] or 99)):
+        print(f"{entry['model']:<9} rank {entry['rank_most_limiting'] or '-'}"
+              f"  {entry['stressor']:<12} x50 at "
+              f"{fmt(entry['range_fraction'], 2)} of its tested range")
+    print(f"\nSaved {RESULTS_DIR / 'stressor_ranking.csv'}")
+    return ranking
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Synthetic stressor test")
     parser.add_argument("--data", default=ev.DATA)
@@ -489,7 +519,13 @@ def main(argv=None):
                         help="use only the first N baseline images (trial)")
     parser.add_argument("--bootstrap", type=int, default=BOOTSTRAP_RESAMPLES)
     parser.add_argument("--allow-other-gpu", action="store_true")
+    parser.add_argument("--rank-only", action="store_true",
+                        help="only update the stressor ranking (after the "
+                             "field test); does not run the models")
     args = parser.parse_args(argv)
+
+    if args.rank_only:
+        return update_ranking()
 
     import torch
     from ultralytics import YOLO

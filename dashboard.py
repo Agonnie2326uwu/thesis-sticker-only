@@ -5,7 +5,7 @@ One window for the whole study, for presenting to the panel:
 
   Overview                 the three tests and where each one stands
   1  Natural Test Set      accuracy and speed on the 210 test images
-  2  Field Test            detection by distance (5-10 m)
+  2  Field Test            detection by distance (6-10 m)
   3  Synthetic Stressors   motion blur, occlusion, low light, glare
   4  Final Comparison      which model is better under each condition
   5  Photos                every photo used in the tests, both models'
@@ -39,8 +39,6 @@ matplotlib.use("TkAgg")
 import matplotlib.ticker  # noqa: E402
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
-
-from camera_utils import AUTO_CAMERA_LABEL, camera_choices
 
 
 # ============================================================
@@ -689,7 +687,6 @@ class Dashboard:
         self.log_lines = []
         self.figures = []
         self.images = []
-        self.camera_indices = {}
         self.current = None
         self.photo = {"set": None, "filter": "All photos", "distance": "All",
                       "stressor": "motion_blur",
@@ -776,17 +773,6 @@ class Dashboard:
                    style="Side.TButton", command=self.open_app).pack(fill="x")
         ttk.Button(side, text="Export PDF report", style="Side.TButton",
                    command=self.export_pdf).pack(fill="x")
-
-        ttk.Label(side, text="CAMERA FOR LIVE APP", background=PANEL,
-                  foreground=MUTED, font=("Segoe UI", 9, "bold")).pack(
-                      anchor="w", padx=16, pady=(18, 6))
-        self.camera_var = tk.StringVar(value=AUTO_CAMERA_LABEL)
-        self.camera_box = ttk.Combobox(side, textvariable=self.camera_var,
-                                       state="readonly", width=22)
-        self.camera_box.pack(fill="x", padx=12)
-        self.camera_box.configure(postcommand=self.refresh_camera_choices)
-        self.refresh_camera_choices()
-
         # Kept apart at the bottom so it is not clicked by accident.
         ttk.Button(side, text="Start over (archive all results)",
                    style="Danger.TButton",
@@ -990,7 +976,7 @@ class Dashboard:
             [("1  Natural test set", "210 photos the models never saw",
               "Which model is more accurate and faster?",
               status(test1["updated"])),
-             ("2  Field test", "Webcam at the gate, 5 to 10 m",
+             ("2  Field test", "Webcam at the gate, 6 to 10 m",
               "Up to what distance is the sticker still found?",
               status(field["updated"])),
              ("3  Synthetic stressors", "Blurred, covered, darker, brighter",
@@ -1095,8 +1081,8 @@ class Dashboard:
             "Test 2 · Field test (distance)",
             "The training photos were all taken at 5 m or closer. This test "
             "checks how far away each model can still find the sticker, using "
-            "new webcam photos at the PSU gate at 5 m (baseline) and 6, 7, 8, "
-            "9 and 10 m, in daylight, with the vehicle parked at each mark.")
+            "new webcam photos at the PSU gate beyond the 5 m baseline: 6, 7, "
+            "8, 9 and 10 m, in daylight, with the vehicle parked at each mark.")
         self.steps_box([
             "Capture photos with the camera app's Field Test tab at each "
             "distance (RTX 2050 laptop at the gate).",
@@ -1642,23 +1628,12 @@ class Dashboard:
             f"Previous results moved to:\n{target}\n\nStart with Test 1.")
         self.show(self.PAGES[1])
 
-    def refresh_camera_choices(self):
-        choices = camera_choices()
-        self.camera_indices = {label: index for label, index in choices}
-        self.camera_box.configure(values=[label for label, _ in choices])
-        if self.camera_var.get() not in self.camera_indices:
-            self.camera_var.set(choices[0][0])
-
     def open_app(self):
         app = BASE_DIR / "app.py"
         if not app.is_file():
             messagebox.showerror("Missing app", "app.py was not found.")
             return
-        command = [sys.executable, str(app)]
-        index = self.camera_indices.get(self.camera_var.get())
-        if index is not None:
-            command.extend(["--camera", str(index)])
-        subprocess.Popen(command, cwd=str(BASE_DIR))
+        subprocess.Popen([sys.executable, str(app)], cwd=str(BASE_DIR))
 
     def export_pdf(self):
         from matplotlib.backends.backend_pdf import PdfPages
