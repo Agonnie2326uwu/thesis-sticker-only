@@ -18,6 +18,7 @@ Usage (from the project folder, with the venv active):
     python app.py
 """
 
+import argparse
 import csv
 import json
 import os
@@ -33,6 +34,8 @@ import numpy as np
 import torch
 from PIL import Image, ImageTk
 from ultralytics import YOLO
+
+from camera_utils import CameraError, open_camera
 
 
 # ============================================================
@@ -55,7 +58,8 @@ CONF = 0.25              # same "detected" threshold as every test
 IMAGE_SIZE = 640         # same input size as training and testing
 WARMUP_FRAMES = 10       # blank frames run before the camera starts
 
-CAMERA_INDEX = 0
+# None = pick the USB camera automatically; use --camera N to force one.
+CAMERA_INDEX = None
 # 640 x 480 keeps the view smooth; the models resize every frame to 640
 # pixels anyway, so a bigger camera picture would only slow the app down.
 CAMERA_WIDTH = 640
@@ -279,7 +283,7 @@ class LatestFrameGrabber:
 # ============================================================
 
 class StickerApp:
-    def __init__(self, root):
+    def __init__(self, root, camera_index=None):
         self.root = root
         self.root.title("PSU Vehicle Sticker Detection - YOLO26n vs YOLO11n")
         self.root.geometry("1180x780")
@@ -288,6 +292,8 @@ class StickerApp:
 
         self.models, self.sticker_ids = {}, {}
         self.camera = None
+        self.camera_index = camera_index
+        self.camera_info = None
         self.worker = None
         self.running = False
         self.closing = False
@@ -491,23 +497,28 @@ class StickerApp:
             self.status_var.set("Model loading failed.")
             return
 
-        camera = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
-        if not camera.isOpened():
-            camera.release()
-            messagebox.showerror("Camera error", "Could not open the webcam. "
-                                 "Close other apps using the camera and try "
-                                 "again.")
+        self.status_var.set("Looking for the USB camera...")
+        self.root.update_idletasks()
+        try:
+            camera, info = open_camera(self.camera_index, CAMERA_WIDTH,
+                                       CAMERA_HEIGHT)
+        except CameraError as exc:
+            messagebox.showerror("Camera error", str(exc))
+            self.status_var.set("Camera not started.")
             return
-        camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        camera.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
-        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
 
         while not self.capture_queue.empty():        # drop old requests
             self.capture_queue.get_nowait()
         self.camera = camera
+        self.camera_info = info
         self.running = True
         self._set_buttons(True)
-        self.status_var.set("Camera running.")
+        if info.is_usb:
+            self.status_var.set(f"Camera running: {info.name}.")
+        elif self.camera_index is None:
+            self.status_var.set(f"USB camera unavailable - using {info.name}.")
+        else:
+            self.status_var.set(f"Camera running: {info.name}.")
         self.worker = threading.Thread(target=self._camera_loop, daemon=True)
         self.worker.start()
 
@@ -591,6 +602,7 @@ class StickerApp:
         for view in (self.live_view, self.field_view):
             view.configure(image="", text="Camera stopped")
         self.photos.pop("view", None)
+        self.camera_info = None
         self.status_var.set("Camera stopped.")
 
     # ---------------- field capture ----------------
@@ -730,8 +742,13 @@ class StickerApp:
 # ============================================================
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Live camera demo and field-test capture.")
+    parser.add_argument("--camera", type=int, default=None, metavar="N",
+                        help="camera index (default: prefer the USB camera)")
+    args = parser.parse_args()
     root = tk.Tk()
-    StickerApp(root)
+    StickerApp(root, camera_index=args.camera)
     root.mainloop()
 
 

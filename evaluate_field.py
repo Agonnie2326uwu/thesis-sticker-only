@@ -36,6 +36,7 @@ Outputs (research_outputs/field_results/):
     field_breaking_points.csv  x50 / x90 (pixel width and metres) per model
     field_comparison.csv       bootstrap CI of the x50 difference, McNemar
     field_data_check.csv       images / log rows that could not be matched
+    field_matches.csv          which labelled image each log row was linked to
     chart_distance.png         detection rate per distance + fitted curves
     field_evaluation.jsonl     everything, with versions and settings
 """
@@ -103,12 +104,48 @@ def read_field_log(path):
     return rows
 
 
+def convert_field_dataset(data):
+    """
+    Convert the Platform dataset to YOLO folders. Ultralytics refuses a
+    dataset with no 'train' split, but the field dataset is test-only (it is
+    never used for training). In that case the dataset's file list is
+    downloaded, a local copy with every photo marked 'train' is converted
+    instead, and all splits are read anyway, so every photo is still used.
+    The dataset on the Platform is not changed.
+    """
+    import json
+
+    from ultralytics.data.utils import convert_ndjson_to_yolo_if_needed
+
+    try:
+        return convert_ndjson_to_yolo_if_needed(str(data), 1.0, split="test")
+    except ValueError as error:
+        if "'train' split" not in str(error):
+            raise
+
+    from ultralytics.utils.checks import check_file
+
+    folder = BASE_DIR / "research_outputs" / "field_dataset_list"
+    folder.mkdir(parents=True, exist_ok=True)
+    listing = Path(check_file(str(data), download_dir=str(folder)))
+    lines = [json.loads(line) for line in
+             listing.read_text(encoding="utf-8").splitlines() if line.strip()]
+    lines[0].pop("path", None)        # keep the Platform's own image links
+    for record in lines[1:]:
+        record["split"] = "train"
+    patched = folder / f"{listing.stem}-all.ndjson"
+    patched.write_text("\n".join(json.dumps(line) for line in lines) + "\n",
+                       encoding="utf-8")
+    print(f"Test-only dataset: converted {len(lines) - 1} photos from a "
+          "local copy of its file list")
+    return convert_ndjson_to_yolo_if_needed(str(patched), 1.0)
+
+
 def dataset_images(data):
     """(class_names, {image_stem: image_path}) over every dataset split."""
-    from ultralytics.data.utils import (check_det_dataset,
-                                        convert_ndjson_to_yolo_if_needed)
+    from ultralytics.data.utils import check_det_dataset
 
-    data_yaml = convert_ndjson_to_yolo_if_needed(str(data), 1.0, split="test")
+    data_yaml = convert_field_dataset(data)
     config = check_det_dataset(str(data_yaml))
     root = Path(config.get("path", "."))
 
@@ -151,23 +188,103 @@ def image_size(image_path):
         return image.size        # (width, height)
 
 
-def match_images(rows, images):
-    """Link log rows to labelled images by file name; report problems."""
-    matched, problems = [], []
-    logged = set()
+SIMILARITY_MAX = 10.0    # mean grey-level difference (0-255) for a picture match
+FINGERPRINT_SIZE = 32
 
-    for row in rows:
-        stem = Path(row["image_file"]).stem
-        logged.add(stem)
-        image = images.get(stem)
 
-        if image is None:
+def logged_photo(row, log_dir):
+    """The photo file on this computer that a log row refers to."""
+    relative = str(row.get("image_file", "")).replace("\\", "/")
+    return Path(log_dir) / relative
+
+
+def log_stem(row):
+    return Path(str(row.get("image_file", "")).replace("\\", "/")).stem
+
+
+def content_keys(path):
+    """Hashes the Ultralytics Platform may put in a downloaded file's name."""
+    import hashlib
+
+    data = Path(path).read_bytes()
+    return {hashlib.md5(data).hexdigest(), hashlib.sha256(data).hexdigest(),
+            hashlib.sha256(data).hexdigest()[:32],
+            hashlib.sha1(data).hexdigest()[:32]}
+
+
+def name_hash(image_path):
+    """'022280be...13863_51' -> '022280be...13863' (the Platform's name)."""
+    stem = Path(image_path).stem.lower()
+    head, _, tail = stem.rpartition("_")
+    return head if head and tail.isdigit() else stem
+
+
+def fingerprint(path):
+    """A tiny grey version of the picture, to recognise the same photo even
+    after the Platform re-saved it."""
+    import numpy as np
+    from PIL import Image
+
+    with Image.open(path) as image:
+        small = image.convert("L").resize((FINGERPRINT_SIZE,
+                                           FINGERPRINT_SIZE))
+    return np.asarray(small, dtype=float)
+
+
+def match_images(rows, images, log_dir=None):
+    """
+    Link each log row to its labelled image, in this order:
+      1. same file name
+      2. identical file (the Platform renames downloads to a content hash)
+      3. same picture (tiny grey fingerprint, one-to-one, closest first)
+    Returns (matched, problems); every link is also listed in
+    field_matches.csv so it can be checked.
+    """
+    log_dir = Path(log_dir) if log_dir else FIELD_LOG.parent
+    by_hash = {name_hash(p): p for p in images.values()}
+    links, pending, used = {}, [], set()
+
+    for index, row in enumerate(rows):
+        image = images.get(log_stem(row))
+        how = "file name"
+        local = logged_photo(row, log_dir)
+        if image is None and local.is_file():
+            image = next((by_hash[k] for k in content_keys(local)
+                          if k in by_hash and by_hash[k] not in used), None)
+            how = "identical file"
+        if image is not None and image not in used:
+            links[index] = (image, how, "")
+            used.add(image)
+        elif local.is_file():
+            pending.append(index)
+
+    free = [p for p in images.values() if p not in used]
+    if pending and free:
+        prints = {p: fingerprint(p) for p in free}
+        pairs = []
+        for index in pending:
+            mine = fingerprint(logged_photo(rows[index], log_dir))
+            for path, other in prints.items():
+                pairs.append((float(abs(mine - other).mean()), index, path))
+        for difference, index, path in sorted(pairs, key=lambda x: x[0]):
+            if (difference <= SIMILARITY_MAX and index not in links
+                    and path not in used):
+                links[index] = (path, "same picture",
+                                round(difference, 2))
+                used.add(path)
+
+    matched, problems, report = [], [], []
+    for index, row in enumerate(rows):
+        if index not in links:
             problems.append({"problem": "in log, not in labelled dataset",
                              "file": row["image_file"]})
             continue
-
+        image, how, difference = links[index]
+        report.append({"log_file": row["image_file"],
+                       "distance_m": row.get("distance_m", ""),
+                       "dataset_file": image.name, "matched_by": how,
+                       "picture_difference": difference})
         labels = read_labels(image)
-
         if row.get("sticker_present") == "yes" and not labels:
             problems.append({
                 "problem": "marked 'sticker present' but has no label box "
@@ -176,14 +293,14 @@ def match_images(rows, images):
         if row.get("sticker_present") == "no" and labels:
             problems.append({"problem": "marked 'no sticker' but has a "
                                         "label box", "file": row["image_file"]})
-
         matched.append((row, image, len(labels)))
 
-    for stem, image in images.items():
-        if stem not in logged:
+    for image in images.values():
+        if image not in used:
             problems.append({"problem": "in labelled dataset, not in log "
                                         "(excluded)", "file": image.name})
 
+    match_images.report = report
     return matched, problems
 
 
@@ -424,10 +541,23 @@ def interpolate_point(x, y, target):
     return None                              # never falls below target
 
 
-def x50_x90(x, y):
-    """(x50, x90, method): logistic regression, else interpolation."""
+WRONG_DIRECTION = "wrong direction"
+
+
+def x50_x90(x, y, harder="higher"):
+    """
+    (x50, x90, method): logistic regression, else interpolation.
+    harder: "higher" when a larger x is a harder condition (metres, blur,
+    gamma...), "lower" when a smaller x is harder (sticker pixel width).
+    If detection does NOT fall as the condition gets harder, there is no
+    breaking point: (None, None, WRONG_DIRECTION).
+    """
     coefficients = fit_logistic(x, y)
     if coefficients is not None:
+        slope = coefficients[1]
+        if (harder == "higher" and slope >= 0) or (harder == "lower"
+                                                   and slope <= 0):
+            return None, None, WRONG_DIRECTION
         x50, x90 = breaking_values(coefficients)
         return x50, x90, "logistic regression"
     if (y and 0 < sum(y) < len(y)
@@ -437,13 +567,17 @@ def x50_x90(x, y):
     return None, None, ""
 
 
-def describe_fit(x, y, label):
+def describe_fit(x, y, label, harder="higher"):
     coefficients = fit_logistic(x, y)
-    x50, x90, method = x50_x90(x, y)
+    x50, x90, method = x50_x90(x, y, harder)
     rate = sum(y) / len(y) if y else None
 
     note = ""
-    if not method:
+    if method == WRONG_DIRECTION:
+        method = ""
+        note = ("not estimable: detection did not fall as the condition got "
+                "harder (check the sample size per level)")
+    elif not method:
         if y and all(y):
             note = "detected every time: limit not reached in tested range"
         elif y and not any(y):
@@ -471,7 +605,8 @@ def describe_fit(x, y, label):
             "detection_rate": rate, "stickers": len(y), "note": note}
 
 
-def paired_bootstrap_x50(outcomes, models, x_key, resamples, seed):
+def paired_bootstrap_x50(outcomes, models, x_key, resamples, seed,
+                         harder="higher"):
     """
     Resample IMAGES with replacement (both models keep the same images) and
     refit each model; returns the 95% percentile CI of x50(A) - x50(B).
@@ -487,8 +622,8 @@ def paired_bootstrap_x50(outcomes, models, x_key, resamples, seed):
     for _ in range(resamples):
         sample = [r for _ in images for r in by_image[rng.choice(images)]]
         x = [r[x_key] for r in sample]
-        a = x50_x90(x, [r[f"{first}_detected"] for r in sample])[0]
-        b = x50_x90(x, [r[f"{second}_detected"] for r in sample])[0]
+        a = x50_x90(x, [r[f"{first}_detected"] for r in sample], harder)[0]
+        b = x50_x90(x, [r[f"{second}_detected"] for r in sample], harder)[0]
         if a is not None and b is not None:
             differences.append(a - b)
 
@@ -607,12 +742,19 @@ def main(argv=None):
     print(f"Field log: {len(rows)} captures")
     names, images = dataset_images(args.data)
     print(f"Labelled images found: {len(images)}")
-    matched, problems = match_images(rows, images)
+    matched, problems = match_images(rows, images, Path(args.log).parent)
     print(f"Matched images: {len(matched)}")
+    ways = {}
+    for item in match_images.report:
+        ways[item["matched_by"]] = ways.get(item["matched_by"], 0) + 1
+    if ways:
+        print("  matched by " + ", ".join(f"{k}: {v}" for k, v in ways.items()))
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     ev.write_csv(RESULTS_DIR / "field_data_check.csv",
                  problems or [{"problem": "none", "file": ""}])
+    ev.write_csv(RESULTS_DIR / "field_matches.csv",
+                 match_images.report or [{"log_file": "none"}])
     if problems:
         print(f"WARNING: {len(problems)} data problem(s). "
               "See field_data_check.csv")
@@ -691,7 +833,8 @@ def main(argv=None):
     points, fits_m = [], {}
     for name in model_names:
         by_width = describe_fit(width, [r[f"{name}_detected"]
-                                        for r in parked], "px")
+                                        for r in parked], "px",
+                                harder="lower")
         by_metre = describe_fit(metres, [r[f"{name}_detected"]
                                          for r in with_distance], "m")
         fits_m[name] = by_metre
@@ -718,7 +861,8 @@ def main(argv=None):
     print(f"--- paired bootstrap ({BOOTSTRAP_RESAMPLES} resamples)")
     boot_px = paired_bootstrap_x50(parked, (first, second),
                                    "sticker_px_width_640",
-                                   BOOTSTRAP_RESAMPLES, BOOTSTRAP_SEED)
+                                   BOOTSTRAP_RESAMPLES, BOOTSTRAP_SEED,
+                                   harder="lower")
     test = mcnemar_exact(parked, first, second)
     comparison = {
         "comparison": f"{first} - {second}",

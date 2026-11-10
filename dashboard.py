@@ -325,21 +325,51 @@ def higher_better(a, b, tolerance=0.0):
     return MODELS[0] if a > b else MODELS[1]
 
 
-def stats_verdict(verdict, x50_26, x50_11):
-    """Winner for a breaking point, honest about statistical clarity."""
+def stats_verdict(verdict, x50_26, x50_11, note_26="", note_11="",
+                  mcnemar=None):
+    """
+    Winner for a breaking point, honest about statistical clarity.
+    note_26 / note_11: the fit notes ("detected every time ..." means the
+    model never broke). mcnemar: (p, only_26, only_11), used when a breaking
+    point cannot be estimated for one of the models.
+    """
     verdict = verdict or ""
     if verdict.startswith("neither model"):
         return "Both held up"
-    if x50_26 is None and x50_11 is not None:
+
+    def never(note):
+        return str(note or "").startswith("detected every")
+
+    if x50_26 is None and never(note_26) and x50_11 is not None:
         return f"{MODELS[0]} (never broke)"
-    if x50_11 is None and x50_26 is not None:
+    if x50_11 is None and never(note_11) and x50_26 is not None:
         return f"{MODELS[1]} (never broke)"
     if x50_26 is None or x50_11 is None:
-        return "—"
+        if mcnemar and None not in mcnemar:
+            p, only_26, only_11 = mcnemar
+            if p < 0.05 and only_26 != only_11:
+                more = MODELS[0] if only_26 > only_11 else MODELS[1]
+                return f"{more} found more stickers (McNemar)"
+            return "No clear difference"
+        return "Not estimable"
     leader = MODELS[0] if x50_26 > x50_11 else MODELS[1]
     if verdict.startswith("difference is clear"):
         return leader
     return f"No clear difference ({leader} slightly ahead)"
+
+
+def field_notes(field):
+    """The two models' distance-fit notes (metres)."""
+    points = field.get("points", {})
+    return tuple(points.get(m, {}).get("note_metres", "") for m in MODELS)
+
+
+def field_mcnemar(field):
+    """(p, only YOLO26n, only YOLO11n) from the field comparison."""
+    c = field.get("comparison", {}) or {}
+    return (num(c.get("mcnemar_exact_p")),
+            num(c.get(f"detected_only_by_{MODELS[0]}")),
+            num(c.get(f"detected_only_by_{MODELS[1]}")))
 
 
 def scorecard(test1, field, synthetic):
@@ -374,7 +404,8 @@ def scorecard(test1, field, synthetic):
                      "—" if a is None else f"{a:.1f} m",
                      "—" if b is None else f"{b:.1f} m",
                      stats_verdict(field["comparison"].get("bootstrap_verdict"),
-                                   a, b)))
+                                   a, b, *field_notes(field),
+                                   mcnemar=field_mcnemar(field))))
 
     for key, info in STRESSORS.items():
         p26 = synthetic["points"].get((key, "YOLO26n"))
@@ -388,7 +419,8 @@ def scorecard(test1, field, synthetic):
         rows.append((f"{info['name']}: breaks at (50%)",
                      "not reached" if a is None else info["fmt"](a),
                      "not reached" if b is None else info["fmt"](b),
-                     stats_verdict(verdict, a, b) if reached else
+                     stats_verdict(verdict, a, b, p26.get("note"),
+                                   p11.get("note")) if reached else
                      "Both held up"))
     return rows
 
@@ -1113,7 +1145,9 @@ class Dashboard:
             ("YOLO11n still finds half the stickers up to",
              "—" if b is None else f"{b:.1f} m", p["YOLO11n"].get("note_metres", "")),
             ("Holds up better at distance",
-             stats_verdict(comparison.get("bootstrap_verdict"), a, b),
+             stats_verdict(comparison.get("bootstrap_verdict"), a, b,
+                           *field_notes(field),
+                           mcnemar=field_mcnemar(field)),
              f"McNemar p = {num(comparison.get('mcnemar_exact_p')) or 0:.3f}"),
         ])
         self.text(f"Results from {field['updated']}.", muted=True)
@@ -1208,7 +1242,8 @@ class Dashboard:
             rows.append((info["name"], show(p26, "x50"), show(p11, "x50"),
                          show(p26, "x90"), show(p11, "x90"),
                          stats_verdict(verdict, num(p26.get("x50")),
-                                       num(p11.get("x50")))))
+                                       num(p11.get("x50")), p26.get("note"),
+                                       p11.get("note"))))
         self.table(("Condition", "YOLO26n breaks at", "YOLO11n breaks at",
                     "YOLO26n reliable to", "YOLO11n reliable to",
                     "Tolerates it better"),
