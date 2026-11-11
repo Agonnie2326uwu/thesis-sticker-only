@@ -1,0 +1,2 @@
+comparison,x50_px_difference,x50_px_diff_ci_low,x50_px_diff_ci_high,bootstrap_valid_resamples,bootstrap_verdict,stickers,detected_only_by_YOLO26n,detected_only_by_YOLO11n,mcnemar_exact_p,note
+YOLO26n - YOLO11n,,,,213,not estimable (too many resamples without a valid fit),94,34,8,7e-05,"A smaller x50 pixel width means the model still detects smaller (farther) stickers, i.e. it tolerates distance better."
