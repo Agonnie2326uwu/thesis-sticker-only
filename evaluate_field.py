@@ -26,7 +26,7 @@ What you need first:
   - the field images uploaded to the Ultralytics Platform as their own dataset
     and labelled (a box around every sticker). Do NOT rename the files.
 
-Run on the RTX 2050 field laptop (the script checks):
+Run on the RTX 2050 laptop (the script checks):
     python evaluate_field.py
     python evaluate_field.py --data ul://carl-andre-de-castro/datasets/<name>
 
@@ -735,7 +735,7 @@ def main(argv=None):
     from ultralytics import YOLO
 
     tested_gpu = ev.check_test_gpu(args.allow_other_gpu,
-                                   expected=ev.EXPECTED_FIELD_GPU)
+                                   expected=ev.EXPECTED_GPU)
     model_names = list(ev.MODEL_PATHS)
 
     rows = read_field_log(args.log)

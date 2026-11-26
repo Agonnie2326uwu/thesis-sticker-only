@@ -136,8 +136,8 @@ SCRIPTS = {
 
 # The computer each test is measured on, as stated in the thesis.
 EXPECTED_GPU = {
-    "test": "GTX 1660 SUPER",
-    "synthetic": "GTX 1660 SUPER",
+    "test": "RTX 2050",
+    "synthetic": "RTX 2050",
     "field": "RTX 2050",
 }
 TEST_NAMES = {"test": "Test 1", "synthetic": "Test 3", "field": "Test 2"}
@@ -1025,27 +1025,33 @@ class Dashboard:
 
         rows = scorecard(test1, field, synthetic)
         if rows:
-            self.section("Results so far")
+            self.section("Results")
             self.table(("Measure", "YOLO26n", "YOLO11n", "Better"),
                        rows[:6], widths=[300, 160, 160, 320], winner_column=3)
-            self.text("See Final Comparison for the full scorecard.", muted=True)
 
     def page_test1(self):
         test1 = load_test1()
+        rows_seen = list(test1["metrics"].values())
+        first = rows_seen[0] if rows_seen else {}
+        photos = int(num(first.get("test_images")) or 210)
+        stickers = int(num(first.get("labelled_stickers")) or 0)
+        sticker_text = f" ({stickers} stickers)" if stickers else ""
         self.heading(
             "Test 1 · Natural test set",
-            "Both models take the same final exam: 210 photos (238 stickers) "
-            "they never saw during training. Each model's boxes are compared "
-            "with the correct boxes, and the time per photo is measured.")
+            f"Both models take the same final exam: {photos} photos"
+            f"{sticker_text} they never saw during training. Each model's "
+            "boxes are compared with the correct boxes, and the time per "
+            "photo is measured.")
         self.steps_box([
-            "Load the 210 test photos and their correct sticker boxes.",
+            f"Load the {photos} test photos and their correct sticker boxes.",
             "Each model finds stickers in every photo.",
-            "Compare with the correct boxes: precision, recall, mAP.",
+            "Compare with the correct boxes: precision, recall, mAP, and how "
+            "confident the model is when it finds a sticker.",
             "Time each model photo by photo: 3 runs on the GPU and 3 on the "
             "CPU, after a full warm-up pass.",
         ])
         buttons = [("Run Test 1", "test", [])]
-        note = "about 10-20 minutes (GTX 1660 SUPER desktop)"
+        note = "about 10-20 minutes (RTX 2050 laptop)"
         if len(test1["metrics"]) < 2:
             self.no_results("Click Run Test 1 to create the results.")
             self.actions(buttons, note)
@@ -1065,7 +1071,9 @@ class Dashboard:
                      num(gpu["YOLO11n"].get("fps_runs_sd")) or 0)
             cards.append(("Fastest on GPU", higher_better(fa, fb, tolerance=sd),
                           f"{fa:.1f} vs {fb:.1f} FPS (run-to-run ± {sd:.1f})"))
-        cards.append(("Stickers found (of 238)",
+        found_label = (f"Stickers found (of {stickers})" if stickers
+                       else "Stickers found")
+        cards.append((found_label,
                       f"{m['YOLO26n']['tp_at_app_conf']} vs "
                       f"{m['YOLO11n']['tp_at_app_conf']}",
                       "YOLO26n vs YOLO11n, at confidence 0.25"))
@@ -1087,6 +1095,19 @@ class Dashboard:
             better = (higher_better(x, y) if key == "tp_at_app_conf" else
                       higher_better(-x, -y))
             rows.append((label, f"{x:.0f}", f"{y:.0f}", better))
+        for key, label, sd_key in (
+                ("mean_conf_detected", "Mean confidence (found stickers)",
+                 "sd_conf_detected"),
+                ("mean_conf_all_stickers",
+                 "Mean confidence (all stickers, missed = 0)",
+                 "sd_conf_all_stickers")):
+            x, y = num(m["YOLO26n"].get(key)), num(m["YOLO11n"].get(key))
+            if x is None or y is None:
+                continue
+            sdx = num(m["YOLO26n"].get(sd_key)) or 0.0
+            sdy = num(m["YOLO11n"].get(sd_key)) or 0.0
+            rows.append((label, f"{x:.3f} ± {sdx:.3f}",
+                         f"{y:.3f} ± {sdy:.3f}", higher_better(x, y)))
         self.table(("Measure", "YOLO26n", "YOLO11n", "Better"), rows,
                    widths=[260, 160, 160, 260], winner_column=3)
 
@@ -1129,9 +1150,7 @@ class Dashboard:
         if len(field["points"]) < 2:
             self.no_results("The field test has not been evaluated yet. After "
                             "the field photos are captured and labelled, click "
-                            "Run Test 2 on the laptop. To show the results on "
-                            "this computer, copy the laptop's "
-                            "research_outputs/field_results folder here.")
+                            "Run Test 2 on this laptop.")
             self.actions(buttons, note)
             return
         self.run_later(buttons, note)
@@ -1179,6 +1198,41 @@ class Dashboard:
                 f"{d:g} m: {n}" for d, n in field["counts"].items()) + ".",
                 muted=True)
 
+        # Accuracy at each distance (the same measures as Test 1), so both
+        # models have numbers even when a breaking point is not estimable.
+        by_level = {}
+        for r in field["metrics"]:
+            if r.get("group") == "distance_m":
+                by_level.setdefault(r.get("level"), {})[r.get("model")] = r
+        rows = []
+        for level in sorted(by_level, key=lambda v: num(v) or 0):
+            pair = by_level[level]
+            if len(pair) < 2:
+                continue
+
+            def value(model, key):
+                v = num(pair[model].get(key))
+                return "—" if v is None else f"{v:.2f}"
+            stickers = pair[MODELS[0]].get("labelled_stickers", "")
+            rows.append((f"{level} m", stickers,
+                         value(MODELS[0], "recall_at_app_conf"),
+                         value(MODELS[1], "recall_at_app_conf"),
+                         value(MODELS[0], "precision_at_app_conf"),
+                         value(MODELS[1], "precision_at_app_conf"),
+                         value(MODELS[0], "map50"),
+                         value(MODELS[1], "map50")))
+        if rows:
+            self.section("Accuracy at each distance")
+            self.table(("Distance", "Stickers", "YOLO26n recall",
+                        "YOLO11n recall", "YOLO26n precision",
+                        "YOLO11n precision", "YOLO26n mAP50",
+                        "YOLO11n mAP50"), rows,
+                       widths=[76, 76, 112, 112, 142, 142, 122, 122])
+            self.text("Recall = share of the real stickers that were found; "
+                      "precision = share of the boxes that were real stickers "
+                      "(both at confidence 0.25). Distances with fewer than "
+                      "10 stickers give rough numbers.", muted=True)
+
     def page_synthetic(self):
         synthetic = load_synthetic()
         self.heading(
@@ -1200,7 +1254,7 @@ class Dashboard:
         buttons = [("Run Test 3", "synthetic", []),
                    ("Quick trial (5 photos)", "synthetic",
                     ["--max-images", "5"])]
-        note = "full run about 45-60 minutes (GTX 1660 SUPER desktop)"
+        note = "full run about 45-60 minutes (RTX 2050 laptop)"
         if not synthetic["points"]:
             self.no_results("Click Run Test 3 to create the results.")
             self.actions(buttons, note)

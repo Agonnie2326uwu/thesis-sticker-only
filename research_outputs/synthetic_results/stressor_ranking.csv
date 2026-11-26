@@ -1,9 +1,11 @@
 model,stressor,x50,unit,tested_range,range_fraction,note,rank_most_limiting
-YOLO26n,motion_blur,67.28911,kernel length L (px),0-100,0.67289,,2
-YOLO11n,motion_blur,73.90276,kernel length L (px),0-100,0.73903,,2
-YOLO26n,occlusion,0.46595,share of sticker covered,0-0.9,0.51772,,1
-YOLO11n,occlusion,0.45201,share of sticker covered,0-0.9,0.50223,,1
-YOLO26n,low_light,3.95962,gamma,1-5,0.7399,,3
-YOLO11n,low_light,4.18129,gamma,1-5,0.79532,,3
-YOLO26n,glare,3.27304,brightness gain alpha,1-3,1.13652,x50 outside the tested range (1-3 brightness gain alpha); extrapolated,4
-YOLO11n,glare,3.02476,brightness gain alpha,1-3,1.01238,x50 outside the tested range (1-3 brightness gain alpha); extrapolated,4
+YOLO26n,motion_blur,63.99561,kernel length L (px),0-100,0.63996,,3
+YOLO11n,motion_blur,70.88568,kernel length L (px),0-100,0.70886,,2
+YOLO26n,occlusion,0.46329,share of sticker covered,0-0.9,0.51477,,1
+YOLO11n,occlusion,0.44389,share of sticker covered,0-0.9,0.49321,,1
+YOLO26n,low_light,3.82841,gamma,1-5,0.7071,,4
+YOLO11n,low_light,4.10131,gamma,1-5,0.77533,,3
+YOLO26n,glare,3.26501,brightness gain alpha,1-3,1.13251,x50 outside the tested range (1-3 brightness gain alpha); extrapolated,5
+YOLO11n,glare,3.15542,brightness gain alpha,1-3,1.07771,x50 outside the tested range (1-3 brightness gain alpha); extrapolated,4
+YOLO26n,distance,8.2466,metres (field test),6-10,0.56165,x90 outside the tested range (6-10 m); extrapolated,2
+YOLO11n,distance,,metres (field test),6-10,,not estimable: detection did not fall as the condition got harder (check the sample size per level),

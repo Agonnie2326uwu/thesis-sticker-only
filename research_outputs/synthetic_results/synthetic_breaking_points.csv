@@ -1,9 +1,9 @@
 stressor,model,unit,b0,b1,x50,x90,method,detection_rate,stickers,note
-motion_blur,YOLO26n,kernel length L (px),4.00694,-0.05955,67.28911,30.39078,logistic regression,0.64866,4221,
-motion_blur,YOLO11n,kernel length L (px),3.94152,-0.05333,73.90276,32.70522,logistic regression,0.69557,4221,
-occlusion,YOLO26n,share of sticker covered,6.60844,-14.18286,0.46595,0.31102,logistic regression,0.51592,2010,
-occlusion,YOLO11n,share of sticker covered,4.96348,-10.98101,0.45201,0.25191,logistic regression,0.50199,2010,
-low_light,YOLO26n,gamma,4.75474,-1.20081,3.95962,2.12983,logistic regression,0.68745,3417,
-low_light,YOLO11n,gamma,4.33601,-1.037,4.18129,2.06247,logistic regression,0.71291,3417,
-glare,YOLO26n,brightness gain alpha,4.80249,-1.46729,3.27304,1.77557,logistic regression,0.83377,3417,x50 outside the tested range (1-3 brightness gain alpha); extrapolated
-glare,YOLO11n,brightness gain alpha,4.97522,-1.64483,3.02476,1.68892,logistic regression,0.80187,3417,x50 outside the tested range (1-3 brightness gain alpha); extrapolated
+motion_blur,YOLO26n,kernel length L (px),4.1297,-0.06453,63.99561,29.94647,logistic regression,0.62352,3801,
+motion_blur,YOLO11n,kernel length L (px),4.25782,-0.06007,70.88568,34.30551,logistic regression,0.67877,3801,
+occlusion,YOLO26n,share of sticker covered,6.19085,-13.36276,0.46329,0.29886,logistic regression,0.51326,1810,
+occlusion,YOLO11n,share of sticker covered,5.28478,-11.90554,0.44389,0.25934,logistic regression,0.49392,1810,
+low_light,YOLO26n,gamma,4.41453,-1.1531,3.82841,1.92291,logistic regression,0.66038,3077,
+low_light,YOLO11n,gamma,3.92859,-0.95789,4.10131,1.80748,logistic regression,0.69191,3077,
+glare,YOLO26n,brightness gain alpha,5.81404,-1.78071,3.26501,2.03111,logistic regression,0.86448,3077,x50 outside the tested range (1-3 brightness gain alpha); extrapolated
+glare,YOLO11n,brightness gain alpha,5.4518,-1.72776,3.15542,1.8837,logistic regression,0.83815,3077,x50 outside the tested range (1-3 brightness gain alpha); extrapolated

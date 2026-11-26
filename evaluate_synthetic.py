@@ -27,7 +27,7 @@ stressor sweeps), and both models are run on every copy.
      fraction of its tested range at which x50 falls, limits detection most.
      Distance is included automatically if evaluate_field.py has been run.
 
-Run on the GTX 1660 SUPER desktop (the script checks):
+Run on the RTX 2050 laptop (the script checks):
     python evaluate_synthetic.py
     python evaluate_synthetic.py --max-images 5      # quick trial run
     python evaluate_synthetic.py --stressors occlusion glare

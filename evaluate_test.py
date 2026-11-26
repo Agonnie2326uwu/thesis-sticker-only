@@ -6,17 +6,21 @@ This produces the main result table for the thesis (SOP 2 and SOP 3):
        - precision, recall, F1
        - mAP@0.5 and mAP@0.5:0.95 (COCO-style, 101-point interpolation)
        - TP / FP / FN counts at the app's confidence threshold (0.25)
+       - mean confidence of the stickers each model finds, and mean confidence
+         over all labelled stickers (a missed sticker counts as 0)
   2. Speed on the same 210 test images, one image at a time (batch 1):
        - one full untimed warm-up pass per model first
        - three timed runs per model, swapping the model order each run
        - FPS as mean and SD of the three runs, end to end and model only
-  The script checks that it runs on the GTX 1660 SUPER desktop.
        - preprocess / inference / postprocess time per image
        - mean, standard deviation, median and 95th percentile
        - FPS, on the GPU and on the CPU
 
 Both models are evaluated the same way. YOLO26n uses its NMS-free one-to-one
 head (nms=False), exactly as in app.py. YOLO11n uses standard NMS.
+
+The script checks that it runs on the RTX 2050 laptop, the machine named in
+the thesis (see EXPECTED_GPU).
 
 Usage (from the project folder, with the venv active):
     python evaluate_test.py                  # accuracy + GPU and CPU speed
@@ -101,6 +105,8 @@ BATCH = 16                 # for the accuracy run only; speed uses batch 1
 MAP_CONF = 0.001           # Ultralytics' standard confidence floor for mAP
 APP_CONF = 0.25            # the app's default threshold, for TP / FP / FN
 NMS_IOU = 0.7              # Ultralytics default NMS IoU (YOLO11n only)
+MATCH_IOU = 0.5            # a detection matches a sticker at IoU >= 0.5
+                           # (same rule as the field test)
 
 OUTPUT_DIR = BASE_DIR / "research_outputs"
 EVAL_RUNS_DIR = BASE_DIR / "runs" / "test_eval"
@@ -203,16 +209,15 @@ def environment_info():
     }
 
 
-# Thesis Limitation section: the natural test set, the synthetic stressor
-# test and the FPS benchmark run on the GTX 1660 SUPER desktop; only the
-# field test runs on the RTX 2050 laptop. Each script stops if it finds a
-# different GPU, so results from the wrong machine cannot end up in the
-# tables by mistake.
-EXPECTED_TEST_GPU = "GTX 1660 SUPER"
-EXPECTED_FIELD_GPU = "RTX 2050"
+# Thesis Environment / Limitations section: all three tests (the natural test
+# set, the FPS benchmark, the synthetic stressors and the field test) are
+# measured on the RTX 2050 laptop. Each script stops if it finds a different
+# GPU, so results from the wrong machine cannot end up in the tables by
+# mistake.
+EXPECTED_GPU = "RTX 2050"
 
 
-def check_test_gpu(allow_other, expected=EXPECTED_TEST_GPU):
+def check_test_gpu(allow_other, expected=EXPECTED_GPU):
     """Stop unless the GPU is the one the thesis names (or the user overrides)."""
     import torch
 
@@ -312,7 +317,115 @@ def confusion_counts(matrix, class_id):
     return int(round(tp)), int(round(fp)), int(round(fn))
 
 
-def evaluate_accuracy(name, checkpoint, head, data_yaml, device):
+def box_iou(a, b):
+    """Intersection over union of two xyxy boxes."""
+    ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+    ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+    union = ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1])
+             - inter)
+    return inter / union if union > 0 else 0.0
+
+
+def label_file(image_path):
+    """The YOLO label file that belongs to an image (images/ -> labels/)."""
+    parts = list(Path(image_path).parts)
+    for index in range(len(parts) - 1, -1, -1):
+        if parts[index].lower() == "images":
+            parts[index] = "labels"
+            break
+    return Path(*parts).with_suffix(".txt")
+
+
+def read_ground_truth(image_path, class_id):
+    """Sticker boxes (xyxy, pixels) from the image's YOLO label file."""
+    import cv2
+
+    labels = label_file(image_path)
+    if not labels.is_file():
+        raise SystemExit(
+            f"No label file found for test image:\n  {image_path}\n"
+            f"Expected:\n  {labels}\n"
+            "The confidence score needs the correct sticker boxes.")
+
+    image = cv2.imread(str(image_path))
+    if image is None:
+        raise SystemExit(f"Could not read test image: {image_path}")
+    height, width = image.shape[:2]
+
+    boxes = []
+    for line in labels.read_text(encoding="utf-8").splitlines():
+        fields = line.split()
+        if len(fields) < 5 or int(float(fields[0])) != class_id:
+            continue
+        cx, cy, bw, bh = (float(value) for value in fields[1:5])
+        boxes.append(((cx - bw / 2) * width, (cy - bh / 2) * height,
+                      (cx + bw / 2) * width, (cy + bh / 2) * height))
+    return boxes
+
+
+def match_confidences(truth, predictions):
+    """
+    Greedy one-to-one matching, highest confidence first (the same rule as
+    the field test). Returns the confidence of the detection matched to each
+    truth box; stickers with no match are left out.
+    """
+    matched = []
+    taken = set()
+
+    for box, conf in sorted(predictions, key=lambda p: -p[1]):
+        best, best_iou = None, MATCH_IOU
+        for index, gt in enumerate(truth):
+            if index in taken:
+                continue
+            value = box_iou(box, gt)
+            if value >= best_iou:
+                best, best_iou = index, value
+        if best is not None:
+            taken.add(best)
+            matched.append(conf)
+
+    return matched
+
+
+def confidence_scores(model, head, images, class_id, device):
+    """
+    Mean detection confidence on the 210 test images, per labelled sticker.
+
+    mean_conf_detected      mean confidence over the stickers that were found
+    mean_conf_all_stickers  mean over every labelled sticker, with a missed
+                            sticker counting as 0 (so recall is included)
+    """
+    found, every = [], []
+
+    for path in images:
+        truth = read_ground_truth(path, class_id)
+        result = model.predict(
+            source=str(path), conf=APP_CONF, iou=NMS_IOU, imgsz=IMAGE_SIZE,
+            device=device, verbose=False, **head["args"])[0]
+
+        predictions = []
+        boxes = result.boxes
+        if boxes is not None and len(boxes):
+            predictions = list(zip(boxes.xyxy.cpu().numpy().tolist(),
+                                   boxes.conf.cpu().numpy().tolist()))
+
+        matched = match_confidences(truth, predictions)
+        found.extend(matched)
+        every.extend(matched)
+        every.extend([0.0] * (len(truth) - len(matched)))
+
+    return {
+        "matched_stickers_at_app_conf": len(found),
+        "mean_conf_detected": statistics.fmean(found) if found else 0.0,
+        "sd_conf_detected": statistics.stdev(found) if len(found) > 1 else 0.0,
+        "mean_conf_all_stickers": statistics.fmean(every) if every else 0.0,
+        "sd_conf_all_stickers": (statistics.stdev(every)
+                                 if len(every) > 1 else 0.0),
+    }
+
+
+def evaluate_accuracy(name, checkpoint, head, data_yaml, device, images):
     from ultralytics import YOLO
 
     common = {
@@ -359,6 +472,9 @@ def evaluate_accuracy(name, checkpoint, head, data_yaml, device):
             "this output."
         )
 
+    # Run 3: confidence of each matched sticker at the app's threshold.
+    conf = confidence_scores(model, head, images, class_id, device)
+
     return round_dict({
         "model": name,
         "inference_head": head["label"],
@@ -377,6 +493,11 @@ def evaluate_accuracy(name, checkpoint, head, data_yaml, device):
         "precision_at_app_conf": safe_div(tp, tp + fp),
         "recall_at_app_conf": safe_div(tp, tp + fn),
         "f1_at_app_conf": f1_score(safe_div(tp, tp + fp), safe_div(tp, tp + fn)),
+        "matched_stickers_at_app_conf": conf["matched_stickers_at_app_conf"],
+        "mean_conf_detected": conf["mean_conf_detected"],
+        "sd_conf_detected": conf["sd_conf_detected"],
+        "mean_conf_all_stickers": conf["mean_conf_all_stickers"],
+        "sd_conf_all_stickers": conf["sd_conf_all_stickers"],
         "val_ms_per_image": sum(
             metrics.speed.get(k, 0.0) for k in ("preprocess", "inference",
                                                 "postprocess")
@@ -539,7 +660,7 @@ def main(argv=None):
     parser.add_argument("--allow-count-mismatch", action="store_true")
     parser.add_argument("--allow-other-gpu", action="store_true",
                         help=f"run even if the GPU is not the "
-                             f"{EXPECTED_TEST_GPU}")
+                             f"{EXPECTED_GPU}")
     args = parser.parse_args(argv)
 
     import torch
@@ -587,7 +708,7 @@ def main(argv=None):
                      "app_conf": APP_CONF, "nms_iou": NMS_IOU,
                      "speed_warmup": "1 full untimed pass per model",
                      "speed_rounds": SPEED_ROUNDS,
-                     "expected_test_gpu": EXPECTED_TEST_GPU,
+                     "expected_gpu": EXPECTED_GPU,
                      "tested_gpu": tested_gpu},
     })
 
@@ -595,7 +716,8 @@ def main(argv=None):
     accuracy_rows = []
     for name, checkpoint, head in jobs:
         print(f"\n=== Accuracy: {name} [{head['label']}] ===")
-        row = evaluate_accuracy(name, checkpoint, head, data_yaml, accuracy_device)
+        row = evaluate_accuracy(name, checkpoint, head, data_yaml,
+                                accuracy_device, test_images)
         row.update({"test_images": len(test_images),
                     "checkpoint_path": str(checkpoint),
                     "checkpoint_sha256": checksums[name],
@@ -634,7 +756,8 @@ def main(argv=None):
         f"TEST SET ACCURACY ({len(test_images)} images)",
         accuracy_rows,
         ["model", "precision", "recall", "f1", "map50", "map50_95",
-         "labelled_stickers", "tp_at_app_conf", "fp_at_app_conf", "fn_at_app_conf"],
+         "labelled_stickers", "tp_at_app_conf", "fp_at_app_conf", "fn_at_app_conf",
+         "mean_conf_detected", "mean_conf_all_stickers"],
     )
     if speed_rows:
         print_table(

@@ -6,9 +6,9 @@ of PSU student vehicle stickers and compared in three tests:
 
 | Test | What it checks | Script | Computer |
 |---|---|---|---|
-| 1 Natural test set | Accuracy (mAP, precision, recall) and speed (FPS) on 210 unseen photos | `evaluate_test.py` | GTX 1660 SUPER desktop |
+| 1 Natural test set | Accuracy (mAP, precision, recall, confidence) and speed (FPS) on 210 unseen photos | `evaluate_test.py` | RTX 2050 laptop |
 | 2 Field test | Up to what distance (6-10 m) each model still finds the sticker | `evaluate_field.py` | RTX 2050 laptop |
-| 3 Synthetic stressors | At what level of motion blur, occlusion, low light and glare each model fails | `evaluate_synthetic.py` | GTX 1660 SUPER desktop |
+| 3 Synthetic stressors | At what level of motion blur, occlusion, low light and glare each model fails | `evaluate_synthetic.py` | RTX 2050 laptop |
 
 Everything can be run and shown from one window: **`python dashboard.py`**.
 
@@ -65,7 +65,7 @@ python dashboard.py
 1. **Test 1** page -> **Run Test 1** (about 10-20 minutes).
 2. **Test 3** page -> **Quick trial (5 photos)** to check it works, then
    **Run Test 3** (about 45-60 minutes).
-3. **Field test** (on the RTX 2050 laptop at the PSU gate):
+3. **Field test** (at the PSU gate, with this laptop):
    - Run `python app.py`, open the **Field test** tab, start the camera,
      choose the distance (6-10 m) and press **Space** for each photo of a
      parked vehicle with a sticker, in daylight; about 30 photos per
@@ -75,8 +75,7 @@ python dashboard.py
      as the dataset `student-vehicle-sticker-field` (do not rename files) and
      draw a box around every sticker.
    - In the dashboard, **Test 2** page -> **Run Test 2**.
-   - Copy `research_outputs/field_results/` to the desktop and run Test 3
-     again, so distance is included in the final ranking.
+   - Run Test 3 again, so distance is included in the final ranking.
 4. **Final Comparison** page shows the full scorecard. **Export PDF report**
    saves everything to `research_outputs/benchmark_report.pdf`.
 
@@ -89,8 +88,12 @@ again from Test 1.
 - The camera app prefers an external USB camera over the laptop's built-in
   camera. If the wrong camera opens, choose it in the dashboard's **Camera**
   dropdown or run `python app.py --camera N` with the camera index.
-- Each script checks the GPU: Tests 1 and 3 expect the GTX 1660 SUPER and
-  Test 2 the RTX 2050, matching the thesis. Use `--allow-other-gpu` on the
-  command line only if the thesis text is changed to match.
+- Each script checks the GPU: all three tests expect the RTX 2050, matching
+  the thesis. Use `--allow-other-gpu` on the command line only if the thesis
+  text is changed to match.
+- Speed depends on the laptop's power state. Measure with it plugged in and on
+  its highest performance setting, with nothing else using the GPU. Two
+  sessions on the same RTX 2050 differed by about 30%, so report a run made
+  under these conditions.
 - Keep this repository **private**: the ethics section limits access to the
   research team and adviser.
