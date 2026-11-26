@@ -1025,10 +1025,9 @@ class Dashboard:
 
         rows = scorecard(test1, field, synthetic)
         if rows:
-            self.section("Results so far")
+            self.section("Results")
             self.table(("Measure", "YOLO26n", "YOLO11n", "Better"),
                        rows[:6], widths=[300, 160, 160, 320], winner_column=3)
-            self.text("See Final Comparison for the full scorecard.", muted=True)
 
     def page_test1(self):
         test1 = load_test1()
